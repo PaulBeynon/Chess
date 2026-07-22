@@ -67,17 +67,27 @@
   .badge.draw{ background:rgba(217,179,84,0.18); color:var(--mid); }
 
   /* board */
-  .analysis-layout{ display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
-  .board-col{ display:flex; gap:14px; width:100%; max-width:470px; }
-  .board{ width:100%; max-width:432px; aspect-ratio:1/1; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr);
-    border:2px solid var(--brass-dim); container-type: inline-size; margin:0 auto; }
-  .sq{ display:flex; align-items:center; justify-content:center; font-size:11.5cqw; line-height:1; user-select:none; position:relative;}
-  .sq.light{ background:var(--parchment); }
-  .sq.dark{ background:var(--moss); }
-  .sq .coord{ position:absolute; bottom:2px; left:3px; font-size:9px; font-family:'IBM Plex Mono'; opacity:0.5; }
-  .piece-white{ color:#faf6ea; text-shadow: -1px 0 0 #1a1108, 1px 0 0 #1a1108, 0 -1px 0 #1a1108, 0 1px 0 #1a1108, 0 2px 3px rgba(0,0,0,0.45); }
-  .piece-black{ color:#171009; text-shadow: -1px 0 0 #f4ecd8, 1px 0 0 #f4ecd8, 0 -1px 0 #f4ecd8, 0 1px 0 #f4ecd8, 0 2px 2px rgba(0,0,0,0.25); }
-  .evalbar{ width:20px; align-self:stretch; background:var(--panel-2); border:1px solid var(--line); position:relative; overflow:hidden; border-radius:3px; flex-shrink:0;}
+  .analysis-layout{ display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; }
+  .board-col{ display:flex; gap:16px; width:100%; max-width:620px; }
+  .board-frame{
+    position:relative; flex:1; min-width:0;
+    background: linear-gradient(160deg, #4a3521 0%, #2b1d10 60%, #1e140b 100%);
+    padding: 26px;
+    border-radius: 10px;
+    box-shadow: 0 22px 46px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(201,162,75,0.3), inset 0 1px 2px rgba(255,224,160,0.15);
+    border: 1px solid rgba(201,162,75,0.4);
+  }
+  .board{ width:100%; aspect-ratio:1/1; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr);
+    border-radius:2px; overflow:hidden; container-type: inline-size;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(0,0,0,0.35); }
+  .sq{ display:flex; align-items:center; justify-content:center; line-height:1; user-select:none; position:relative;}
+  .sq.light{ background: linear-gradient(160deg, #f3e7c9 0%, #e6d3a6 100%); }
+  .sq.dark{ background: linear-gradient(160deg, #6b4a30 0%, #4f3520 100%); }
+  .piece-svg{ width:82%; height:82%; filter: drop-shadow(0 3px 3px rgba(0,0,0,0.4)); }
+  .coord-label{ position:absolute; font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--brass); opacity:0.9; pointer-events:none; letter-spacing:0.02em; text-shadow:0 1px 1px rgba(0,0,0,0.4); }
+  .file-label{ bottom:6px; transform:translateX(-50%); }
+  .rank-label{ left:6px; transform:translateY(-50%); }
+  .evalbar{ width:22px; align-self:stretch; background:var(--panel-2); border:1px solid var(--line); position:relative; overflow:hidden; border-radius:3px; flex-shrink:0;}
   .evalbar .fill{ position:absolute; bottom:0; left:0; width:100%; background:var(--parchment); transition:height 0.25s; }
   .evalbar .marker{ position:absolute; left:0; right:0; height:1px; background:var(--brass-dim); }
   .controls{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
@@ -175,7 +185,9 @@
         <div class="board-col">
           <div class="evalbar"><div class="fill" id="evalFill" style="height:50%;"></div></div>
           <div>
-            <div class="board" id="board"></div>
+            <div class="board-frame" id="boardFrame">
+              <div class="board" id="board"></div>
+            </div>
             <div class="controls">
               <button class="icon" id="btnStart">⏮</button>
               <button class="icon" id="btnPrev">◀</button>
@@ -214,6 +226,10 @@
       </div>
     </div>
   </section>
+
+  <footer style="margin-top:32px; text-align:center;">
+    <span class="small">Chess pieces: Cburnett &amp; Rfc1394, Wikimedia Commons, <a href="https://creativecommons.org/licenses/by-sa/3.0/" target="_blank" rel="noopener">CC BY-SA 3.0</a></span>
+  </footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
@@ -417,11 +433,39 @@ function setUserColorPill(color){
 }
 
 /* ---------------- BOARD RENDERING ---------------- */
-const PIECE_GLYPH = {
+// Piece artwork: the Cburnett chess set (CC BY-SA 3.0, by Wikimedia Commons users
+// Cburnett & Rfc1394), bundled inside the open-source cm-chessboard package. This is the
+// same piece set lichess.org itself uses. We fetch the sprite once, inject it into the
+// document (hidden), then reference individual pieces by id via same-document <use> —
+// far more reliable across browsers than a cross-origin <use href> would be.
+const PIECE_SPRITE_URL = 'https://cdn.jsdelivr.net/npm/cm-chessboard@8.12.17/assets/pieces/standard.svg';
+const PIECE_ID = { p:'bp', r:'br', n:'bn', b:'bb', q:'bq', k:'bk', P:'wp', R:'wr', N:'wn', B:'wb', Q:'wq', K:'wk' };
+let spriteReady = null;
+function ensurePieceSprite(){
+  if(spriteReady) return spriteReady;
+  spriteReady = (async ()=>{
+    try{
+      const res = await fetch(PIECE_SPRITE_URL);
+      const svgText = await res.text();
+      const holder = document.createElement('div');
+      holder.style.cssText = 'position:absolute; width:0; height:0; overflow:hidden;';
+      holder.innerHTML = svgText;
+      document.body.appendChild(holder);
+    }catch(e){
+      console.warn('Could not load piece artwork, falling back to plain glyphs', e);
+    }
+  })();
+  return spriteReady;
+}
+ensurePieceSprite(); // kick off early so it's ready well before the user opens a game
+
+const PIECE_GLYPH_FALLBACK = {
   p:'♟', r:'♜', n:'♞', b:'♝', q:'♛', k:'♚',
   P:'♙', R:'♖', N:'♘', B:'♗', Q:'♕', K:'♔'
 };
-function renderBoard(){
+
+async function renderBoard(){
+  await ensurePieceSprite();
   const fen = state.positions[state.ply];
   const boardEl = document.getElementById('board');
   boardEl.innerHTML = '';
@@ -434,6 +478,7 @@ function renderBoard(){
       } else { addSquare(boardEl, r, c, ch); c++; }
     }
   }
+  renderCoordLabels();
   const evalCp = state.moveEvals[state.ply]?.cp;
   updateEvalBar(evalCp);
 }
@@ -442,18 +487,40 @@ function addSquare(boardEl, r, c, piece){
   const isLight = (r+c) % 2 === 0;
   div.className = 'sq ' + (isLight ? 'light' : 'dark');
   if(piece){
-    const span = document.createElement('span');
-    const isWhitePiece = piece === piece.toUpperCase();
-    span.className = isWhitePiece ? 'piece-white' : 'piece-black';
-    span.textContent = PIECE_GLYPH[piece] || '';
-    div.appendChild(span);
-  }
-  if(c===0){
-    const coord = document.createElement('span');
-    coord.className='coord'; coord.textContent = 8-r;
-    div.appendChild(coord);
+    const pieceId = PIECE_ID[piece];
+    const spriteHasLoaded = document.getElementById(pieceId);
+    if(pieceId && spriteHasLoaded){
+      div.innerHTML = `<svg class="piece-svg" viewBox="0 0 40 40"><use href="#${pieceId}"></use></svg>`;
+    } else {
+      // sprite not ready yet (very first paint) — plain glyph keeps something visible momentarily
+      const span = document.createElement('span');
+      span.style.cssText = 'font-size:70%; color:' + (piece===piece.toUpperCase() ? '#faf6ea' : '#171009') + ';';
+      span.textContent = PIECE_GLYPH_FALLBACK[piece] || '';
+      div.appendChild(span);
+    }
   }
   boardEl.appendChild(div);
+}
+function renderCoordLabels(){
+  const frame = document.getElementById('boardFrame');
+  frame.querySelectorAll('.coord-label').forEach(el=>el.remove());
+  const files = 'abcdefgh';
+  const squares = document.querySelectorAll('#board .sq');
+  for(let c=0;c<8;c++){
+    // bottom row = rank 1, last row (r=7) squares
+    const bottomSq = squares[7*8 + c];
+    const fLabel = document.createElement('span');
+    fLabel.className = 'coord-label file-label';
+    fLabel.textContent = files[c];
+    bottomSq.appendChild(fLabel);
+  }
+  for(let r=0;r<8;r++){
+    const leftSq = squares[r*8]; // first column
+    const rLabel = document.createElement('span');
+    rLabel.className = 'coord-label rank-label';
+    rLabel.textContent = 8-r;
+    leftSq.appendChild(rLabel);
+  }
 }
 function updateEvalBar(cp){
   const fill = document.getElementById('evalFill');
