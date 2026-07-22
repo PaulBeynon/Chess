@@ -181,6 +181,14 @@
       <span class="small" id="fetchStatus"></span>
     </div>
     <div class="row" style="margin-top:12px; align-items:center;">
+      <span class="small" style="text-transform:uppercase; letter-spacing:0.08em;">Time control:</span>
+      <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="bullet"> Bullet</label>
+      <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="blitz"> Blitz</label>
+      <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="rapid"> Rapid</label>
+      <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="classical"> Classical</label>
+      <span class="small">(none checked = all)</span>
+    </div>
+    <div class="row" style="margin-top:12px; align-items:center;">
       <label style="display:flex; align-items:center; gap:6px; text-transform:none; letter-spacing:normal; margin:0;">
         <input type="checkbox" id="autoAnalyseToggle" checked>
         Auto-analyse after import
@@ -242,10 +250,23 @@
   <section id="tab-breakdown" class="panel hidden">
     <div id="breakdownEmpty" class="empty">Auto-analyse some games from the Games tab first — this fills in once you have analysed games.</div>
     <div id="breakdownBody" class="hidden">
+      <div class="row" style="margin-bottom:16px; align-items:center;">
+        <span class="small" style="text-transform:uppercase; letter-spacing:0.08em;">Show:</span>
+        <select id="breakdownSpeedFilter"><option value="all">All analysed games</option></select>
+      </div>
       <div class="row" id="breakdownCards" style="margin-bottom:22px;"></div>
       <h3 style="margin-bottom:10px; font-size:16px;">Accuracy by game</h3>
       <p class="small" style="margin-bottom:14px;">Accuracy is derived from average centipawn loss on your own moves, using the same formula Lichess uses. Ordered oldest → most recent, left to right.</p>
-      <div id="accuracyChart"></div>
+      <div id="accuracyChart" style="margin-bottom:30px;"></div>
+
+      <h3 style="margin-bottom:6px; font-size:16px;">Weaknesses vs. a typical player at your rating</h3>
+      <p class="small" id="radarCaption" style="margin-bottom:14px;"></p>
+      <div id="radarChart"></div>
+      <div class="row" style="justify-content:center; gap:20px; margin-top:8px;">
+        <span class="small"><span style="display:inline-block; width:10px; height:10px; background:var(--brass); border-radius:2px; margin-right:5px;"></span>You</span>
+        <span class="small"><span style="display:inline-block; width:10px; height:10px; border:1px dashed var(--text-dim); margin-right:5px;"></span>Typical player at your rating</span>
+      </div>
+      <p class="small" style="margin-top:14px; opacity:0.75;">These benchmark values are an approximate heuristic based on typical rating↔accuracy correlations, not precise population statistics — treat them as a rough reference point rather than exact data.</p>
     </div>
   </section>
 
@@ -318,7 +339,9 @@ async function fetchGames(){
   const status = document.getElementById('fetchStatus');
   status.textContent = 'fetching…';
   try{
-    const url = `https://lichess.org/api/games/user/${encodeURIComponent(username)}?max=${max}&opening=true&pgnInJson=true`;
+    const checkedSpeeds = Array.from(document.querySelectorAll('.speedFilter:checked')).map(el=>el.value);
+    const perfTypeParam = checkedSpeeds.length ? `&perfType=${checkedSpeeds.join(',')}` : '';
+    const url = `https://lichess.org/api/games/user/${encodeURIComponent(username)}?max=${max}&opening=true&pgnInJson=true${perfTypeParam}`;
     const res = await fetch(url, { headers: { 'Accept': 'application/x-ndjson' } });
     if(!res.ok) throw new Error('Lichess responded ' + res.status);
     const text = await res.text();
@@ -404,6 +427,7 @@ async function analyseGameQuick(g){
   const sanMoves = parseMovesString(g.pgn || '');
   const {positions} = buildPositions(sanMoves);
   let prevCp = 0, blunders = 0, mistakes = 0, inaccuracies = 0, userLossSum = 0, userMoveCount = 0;
+  let firstErrorPly = null;
   for(let ply=0; ply<positions.length; ply++){
     const {cp} = await evaluatePosition(positions[ply], 150); // Quick preset — cloud eval covers most of this anyway
     if(cp === null || cp === undefined) continue; // leave prevCp as-is, skip this position
@@ -418,13 +442,21 @@ async function analyseGameQuick(g){
         if(loss >= 300) blunders++;
         else if(loss >= 120) mistakes++;
         else if(loss >= 50) inaccuracies++;
+        if(firstErrorPly === null && loss >= 50) firstErrorPly = ply;
       }
     }
     prevCp = cp;
   }
   const acpl = userMoveCount > 0 ? Math.round(userLossSum / userMoveCount) : null;
   const result = !g.winner ? 'draw' : ((g.winner === 'white') === isUserWhite ? 'win' : 'loss');
-  state.autoAnalysis[g.id] = { blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true };
+  // "Opening Prep" proxy: how many of your own moves you got through before the first slip.
+  // If you never slipped, credit you with having held for every move you made.
+  const firstErrorMove = firstErrorPly !== null ? Math.ceil(firstErrorPly/2) : (userMoveCount || null);
+  const rating = (isUserWhite ? g.players?.white?.rating : g.players?.black?.rating) ?? null;
+  state.autoAnalysis[g.id] = {
+    blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true,
+    firstErrorMove, rating, speed: g.speed || null
+  };
 }
 
 
@@ -778,21 +810,86 @@ function acplToAccuracy(acpl){
   const acc = 103.1668 * Math.exp(-0.04354 * acpl) - 3.1669;
   return Math.max(0, Math.min(100, acc));
 }
+
+// Heuristic reference tables, not sourced population statistics — see disclaimer in the UI.
+function interpolateTable(table, x){
+  if(x <= table[0][0]) return table[0][1];
+  if(x >= table[table.length-1][0]) return table[table.length-1][1];
+  for(let i=0;i<table.length-1;i++){
+    const [x0,y0]=table[i], [x1,y1]=table[i+1];
+    if(x>=x0 && x<=x1){ const t=(x-x0)/(x1-x0); return y0 + t*(y1-y0); }
+  }
+  return table[table.length-1][1];
+}
+const BENCH_ACCURACY = [[800,62],[1000,70],[1200,76],[1400,80],[1600,84],[1800,87],[2000,90],[2200,92],[2400,94],[2600,95]];
+const BENCH_BLUNDERS = [[800,3.2],[1000,2.4],[1200,1.7],[1400,1.2],[1600,0.85],[1800,0.6],[2000,0.4],[2200,0.28],[2400,0.18],[2600,0.12]];
+const BENCH_MISTAKES = [[800,4.5],[1000,3.6],[1200,2.8],[1400,2.2],[1600,1.7],[1800,1.3],[2000,1.0],[2200,0.75],[2400,0.55],[2600,0.4]];
+const BENCH_CONSISTENCY = [[800,45],[1000,52],[1200,58],[1400,64],[1600,70],[1800,75],[2000,80],[2200,84],[2400,88],[2600,90]];
+const BENCH_OPENING_MOVES = [[800,4],[1000,6],[1200,8],[1400,10],[1600,13],[1800,16],[2000,19],[2200,22],[2400,25],[2600,28]];
+function rateToScore(rate){ return Math.max(0, Math.min(100, 100 - rate*25)); }
+function movesToScore(moves){ return Math.max(0, Math.min(100, (moves/25)*100)); }
+
+function renderRadarChart(axes, size=340){
+  const cx=size/2, cy=size/2, R=size/2-52;
+  const n=axes.length;
+  const angleFor = i => (Math.PI*2*i/n) - Math.PI/2;
+  const pt = (value, i) => {
+    const r = R*(Math.max(0,Math.min(100,value))/100);
+    const a = angleFor(i);
+    return [cx + r*Math.cos(a), cy + r*Math.sin(a)];
+  };
+  let gridSvg='';
+  [20,40,60,80,100].forEach(g=>{
+    const pts = axes.map((_,i)=>pt(g,i).join(',')).join(' ');
+    gridSvg += `<polygon points="${pts}" fill="none" stroke="rgba(232,223,198,0.12)" stroke-width="1"/>`;
+  });
+  let axisSvg='';
+  axes.forEach((ax,i)=>{
+    const [x,y] = pt(100,i);
+    axisSvg += `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="rgba(232,223,198,0.12)" stroke-width="1"/>`;
+    const [lx,ly] = pt(122,i);
+    axisSvg += `<text x="${lx}" y="${ly}" font-size="11" fill="#a9b6ac" text-anchor="middle" dominant-baseline="middle" font-family="IBM Plex Mono, monospace">${ax.label}</text>`;
+  });
+  const hasBench = axes.every(ax=>ax.benchmark !== null);
+  const benchPts = hasBench ? axes.map((ax,i)=>pt(ax.benchmark,i).join(',')).join(' ') : '';
+  const userPts = axes.map((ax,i)=>pt(ax.value,i).join(',')).join(' ');
+  return `<svg viewBox="0 0 ${size} ${size}" style="width:100%; max-width:420px; display:block; margin:0 auto;">
+    ${gridSvg}${axisSvg}
+    ${hasBench ? `<polygon points="${benchPts}" fill="rgba(169,182,172,0.10)" stroke="#a9b6ac" stroke-width="1.5" stroke-dasharray="4,3"/>` : ''}
+    <polygon points="${userPts}" fill="rgba(201,162,75,0.25)" stroke="var(--brass)" stroke-width="2"/>
+  </svg>`;
+}
+
 function renderBreakdown(){
-  const analysed = Object.entries(state.autoAnalysis)
-    .filter(([id, a]) => a.done)
-    .map(([id, a]) => a)
+  const all = Object.values(state.autoAnalysis).filter(a => a.done)
     .sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt));
 
   const emptyEl = document.getElementById('breakdownEmpty');
   const bodyEl = document.getElementById('breakdownBody');
-  if(analysed.length === 0){
+  if(all.length === 0){
     emptyEl.classList.remove('hidden');
     bodyEl.classList.add('hidden');
     return;
   }
   emptyEl.classList.add('hidden');
   bodyEl.classList.remove('hidden');
+
+  // Populate the speed filter with whichever time controls actually appear in the analysed set
+  const speedSelect = document.getElementById('breakdownSpeedFilter');
+  const speedsPresent = Array.from(new Set(all.map(a=>a.speed).filter(Boolean)));
+  const currentSelection = speedSelect.value || 'all';
+  speedSelect.innerHTML = '<option value="all">All analysed games</option>' +
+    speedsPresent.map(s=>`<option value="${s}">${s[0].toUpperCase()+s.slice(1)}</option>`).join('');
+  speedSelect.value = speedsPresent.includes(currentSelection) ? currentSelection : 'all';
+
+  const analysed = speedSelect.value === 'all' ? all : all.filter(a=>a.speed === speedSelect.value);
+  if(analysed.length === 0){
+    document.getElementById('breakdownCards').innerHTML = '<div class="empty">No analysed games for this time control yet.</div>';
+    document.getElementById('accuracyChart').innerHTML = '';
+    document.getElementById('radarChart').innerHTML = '';
+    document.getElementById('radarCaption').textContent = '';
+    return;
+  }
 
   const totalGames = analysed.length;
   const wins = analysed.filter(a=>a.result==='win').length;
@@ -819,14 +916,45 @@ function renderBreakdown(){
   const chartEl = document.getElementById('accuracyChart');
   const bars = analysed.map((a, i)=>{
     const acc = acplToAccuracy(a.acpl);
-    const pct = acc === null ? 4 : Math.max(4, acc); // tiny stub bar if no acpl data
+    const pct = acc === null ? 4 : Math.max(4, acc);
     const color = acc === null ? 'var(--line)' : acc>=88 ? 'var(--good)' : acc>=72 ? 'var(--mid)' : 'var(--bad)';
     const dateLabel = a.createdAt ? new Date(a.createdAt).toLocaleDateString(undefined,{month:'short', day:'numeric'}) : `#${i+1}`;
     const tip = acc === null ? `${dateLabel}: no data` : `${dateLabel}: ${acc.toFixed(1)}% (${a.result})`;
     return `<div class="chart-bar" style="height:${pct}%; background:${color};"><span class="chart-tip">${tip}</span></div>`;
   }).join('');
   chartEl.innerHTML = `<div class="chart-bar-wrap">${bars}</div>`;
+
+  // ---- Radar: your profile vs. a typical player at your rating for this time control ----
+  const ratedGames = analysed.filter(a=>a.rating !== null);
+  const avgRating = ratedGames.length ? Math.round(ratedGames.reduce((s,a)=>s+a.rating,0)/ratedGames.length) : null;
+
+  const blunderRate = totalBlunders/totalGames;
+  const mistakeRate = totalMistakes/totalGames;
+  const accuracies = acplGames.map(a=>acplToAccuracy(a.acpl));
+  let consistencyScore = null;
+  if(accuracies.length >= 2){
+    const mean = accuracies.reduce((s,v)=>s+v,0)/accuracies.length;
+    const variance = accuracies.reduce((s,v)=>s+(v-mean)**2,0)/accuracies.length;
+    const stdev = Math.sqrt(variance);
+    consistencyScore = Math.max(0, Math.min(100, 100 - stdev*2.5));
+  }
+  const openingGames = analysed.filter(a=>a.firstErrorMove !== null);
+  const avgFirstErrorMove = openingGames.length ? openingGames.reduce((s,a)=>s+a.firstErrorMove,0)/openingGames.length : null;
+
+  const axes = [
+    { label:'Accuracy', value: avgAccuracy ?? 0, benchmark: avgRating !== null ? interpolateTable(BENCH_ACCURACY, avgRating) : null },
+    { label:'Blunder Control', value: rateToScore(blunderRate), benchmark: avgRating !== null ? rateToScore(interpolateTable(BENCH_BLUNDERS, avgRating)) : null },
+    { label:'Mistake Control', value: rateToScore(mistakeRate), benchmark: avgRating !== null ? rateToScore(interpolateTable(BENCH_MISTAKES, avgRating)) : null },
+    { label:'Consistency', value: consistencyScore ?? 0, benchmark: avgRating !== null ? interpolateTable(BENCH_CONSISTENCY, avgRating) : null },
+    { label:'Opening Prep', value: avgFirstErrorMove !== null ? movesToScore(avgFirstErrorMove) : 0, benchmark: avgRating !== null ? movesToScore(interpolateTable(BENCH_OPENING_MOVES, avgRating)) : null },
+  ];
+  document.getElementById('radarChart').innerHTML = renderRadarChart(axes);
+  const speedLabel = speedSelect.value === 'all' ? 'all time controls' : speedSelect.value;
+  document.getElementById('radarCaption').textContent = avgRating !== null
+    ? `Based on ${totalGames} analysed ${speedLabel} game${totalGames===1?'':'s'}, average rating ~${avgRating}.`
+    : `Based on ${totalGames} analysed ${speedLabel} game${totalGames===1?'':'s'} — no rating data available, showing your scores only.`;
 }
+document.getElementById('breakdownSpeedFilter').addEventListener('change', renderBreakdown);
 
 /* ---------------- REPERTOIRE ---------------- */
 document.getElementById('repWhitePill').addEventListener('click', ()=>setRepColor('white'));
