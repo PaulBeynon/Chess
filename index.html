@@ -138,6 +138,18 @@
       <button class="btn" id="fetchGamesBtn">Fetch games</button>
       <span class="small" id="fetchStatus"></span>
     </div>
+    <div class="row" style="margin-top:12px; align-items:center;">
+      <label style="display:flex; align-items:center; gap:6px; text-transform:none; letter-spacing:normal; margin:0;">
+        <input type="checkbox" id="autoAnalyseToggle" checked>
+        Auto-analyse after import
+      </label>
+      <select id="autoAnalyseLimit">
+        <option value="5">First 5 games</option>
+        <option value="10" selected>First 10 games</option>
+        <option value="20">First 20 games</option>
+      </select>
+      <span class="small" id="autoAnalyseStatus"></span>
+    </div>
     <div class="gamelist" id="gameList"></div>
   </section>
 
@@ -216,7 +228,9 @@ const state = {
   userColor: 'white',
   moveEvals: {},         // ply -> {cp, classification}
   repertoire: JSON.parse(localStorage.getItem('ledger_repertoire') || '{"white":{},"black":{}}'),
-  repColor: 'white'
+  repColor: 'white',
+  autoAnalysis: {},        // gameId -> {blunders, mistakes, inaccuracies, done}
+  autoAnalysisRunning: false
 };
 
 /* ---------------- TABS ---------------- */
@@ -250,8 +264,12 @@ async function fetchGames(){
     const text = await res.text();
     const lines = text.trim().split('\n').filter(Boolean);
     state.games = lines.map(l => JSON.parse(l));
+    state.autoAnalysis = {};
     renderGameList();
     status.textContent = `${state.games.length} games loaded`;
+    if(document.getElementById('autoAnalyseToggle').checked){
+      runAutoAnalysis();
+    }
   }catch(err){
     console.error(err);
     status.textContent = 'error: ' + err.message;
@@ -268,6 +286,15 @@ function renderGameList(){
     const userWon = g.winner && ((g.winner==='white') === isUserWhite);
     const resultBadge = !g.winner ? '<span class="badge draw">draw</span>'
       : userWon ? '<span class="badge win">win</span>' : '<span class="badge loss">loss</span>';
+    const a = state.autoAnalysis[g.id];
+    let analysisBadge = '';
+    if(a?.done){
+      if(a.blunders > 0) analysisBadge = `<span class="badge loss">${a.blunders} blunder${a.blunders===1?'':'s'}</span>`;
+      else if(a.mistakes > 0) analysisBadge = `<span class="badge draw">${a.mistakes} mistake${a.mistakes===1?'':'s'}</span>`;
+      else analysisBadge = `<span class="badge win">clean</span>`;
+    } else if(a && !a.done){
+      analysisBadge = `<span class="small">analysing…</span>`;
+    }
     const row = document.createElement('div');
     row.className = 'gamerow';
     row.innerHTML = `
@@ -276,12 +303,54 @@ function renderGameList(){
         <div class="meta">${g.opening?.name || 'Unknown opening'} · ${g.speed || ''}</div>
       </div>
       <div style="text-align:right;">
-        ${resultBadge}
+        ${resultBadge} ${analysisBadge}
         <div class="meta">${new Date(g.createdAt).toLocaleDateString()}</div>
       </div>`;
     row.addEventListener('click', ()=> loadGameIntoAnalysis(g, isUserWhite));
     el.appendChild(row);
   });
+}
+
+async function runAutoAnalysis(){
+  if(state.autoAnalysisRunning) return; // don't double-run if user re-imports mid-analysis
+  state.autoAnalysisRunning = true;
+  const limit = parseInt(document.getElementById('autoAnalyseLimit').value, 10);
+  const games = state.games.slice(0, limit);
+  const statusEl = document.getElementById('autoAnalyseStatus');
+  for(let i=0; i<games.length; i++){
+    const g = games[i];
+    statusEl.textContent = `Auto-analysing ${i+1}/${games.length}…`;
+    state.autoAnalysis[g.id] = {done:false};
+    renderGameList();
+    try{
+      await analyseGameQuick(g);
+    }catch(e){
+      console.warn('Auto-analysis failed for game', g.id, e);
+      delete state.autoAnalysis[g.id];
+    }
+    renderGameList();
+  }
+  statusEl.textContent = `Auto-analysis complete (${games.length} games).`;
+  state.autoAnalysisRunning = false;
+}
+
+async function analyseGameQuick(g){
+  const sanMoves = parseMovesString(g.pgn || '');
+  const {positions} = buildPositions(sanMoves);
+  let prevCp = 0, blunders = 0, mistakes = 0, inaccuracies = 0;
+  for(let ply=0; ply<positions.length; ply++){
+    const {cp} = await evaluatePosition(positions[ply], 150); // Quick preset — cloud eval covers most of this anyway
+    if(cp === null || cp === undefined) continue; // leave prevCp as-is, skip this position
+    if(ply>0){
+      const moverIsWhite = (ply % 2 === 1);
+      const loss = moverIsWhite ? (prevCp - cp) : (cp - prevCp);
+      if(loss >= 300) blunders++;
+      else if(loss >= 120) mistakes++;
+      else if(loss >= 50) inaccuracies++;
+    }
+    prevCp = cp;
+  }
+  state.autoAnalysis[g.id] = {blunders, mistakes, inaccuracies, done:true};
 }
 
 /* ---------------- PGN / MOVE PARSING ---------------- */
@@ -493,9 +562,12 @@ function evaluateFenLocal(fen, movetimeMs=400){
   });
 }
 
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
 async function fetchCloudEval(fen){
   try{
     const res = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}`);
+    if(res.status === 429) return 'RATE_LIMITED';
     if(!res.ok) return null; // 404 = position not in Lichess's cache
     const data = await res.json();
     if(!data.pvs || !data.pvs.length) return null;
@@ -511,8 +583,15 @@ async function fetchCloudEval(fen){
   }
 }
 
-async function evaluatePosition(fen, movetimeMs=400){
-  const cloud = await fetchCloudEval(fen);
+async function evaluatePositionRaw(fen, movetimeMs=400){
+  let cloud = await fetchCloudEval(fen);
+  if(cloud === 'RATE_LIMITED'){
+    // Lichess's own guidance: back off a full minute on a 429 before resuming
+    document.getElementById('engineStatus').textContent = 'engine: rate limited, pausing 60s…';
+    await sleep(60000);
+    cloud = await fetchCloudEval(fen);
+    if(cloud === 'RATE_LIMITED') cloud = null; // give up on cloud for this position, fall back to local
+  }
   if(cloud){
     document.getElementById('engineStatus').textContent = 'engine: cloud eval';
     return cloud;
@@ -523,6 +602,16 @@ async function evaluatePosition(fen, movetimeMs=400){
     document.getElementById('engineStatus').textContent = 'engine: skipped (unavailable)';
     return {cp: null, bestMove: null, source: 'unavailable'};
   }
+  return result;
+}
+
+// Every caller (manual full-game analysis, background auto-analysis, anything added later) goes
+// through this single queue, so we never have two requests to Lichess — or two messages to the
+// local engine worker — in flight at once, no matter what triggered them.
+let evalQueue = Promise.resolve();
+function evaluatePosition(fen, movetimeMs=400){
+  const result = evalQueue.then(()=> evaluatePositionRaw(fen, movetimeMs));
+  evalQueue = result.catch(()=>{});
   return result;
 }
 
