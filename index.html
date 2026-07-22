@@ -783,10 +783,18 @@ function evaluateFenLocal(fen, movetimeMs=400){
 
 function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
+// Shared across every call — once Lichess throttles us, every position skips straight to the
+// local engine for the rest of this window instead of each one blocking for 60s in turn.
+let cloudBlockedUntil = 0;
+
 async function fetchCloudEval(fen){
+  if(Date.now() < cloudBlockedUntil) return 'RATE_LIMITED'; // skip the network call entirely while blocked
   try{
     const res = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}`);
-    if(res.status === 429) return 'RATE_LIMITED';
+    if(res.status === 429){
+      cloudBlockedUntil = Date.now() + 60000; // Lichess's own guidance: back off a full minute
+      return 'RATE_LIMITED';
+    }
     if(!res.ok) return null; // 404 = position not in Lichess's cache
     const data = await res.json();
     if(!data.pvs || !data.pvs.length) return null;
@@ -803,15 +811,11 @@ async function fetchCloudEval(fen){
 }
 
 async function evaluatePositionRaw(fen, movetimeMs=400){
-  let cloud = await fetchCloudEval(fen);
+  const cloud = await fetchCloudEval(fen);
   if(cloud === 'RATE_LIMITED'){
-    // Lichess's own guidance: back off a full minute on a 429 before resuming
-    document.getElementById('engineStatus').textContent = 'engine: rate limited, pausing 60s…';
-    await sleep(60000);
-    cloud = await fetchCloudEval(fen);
-    if(cloud === 'RATE_LIMITED') cloud = null; // give up on cloud for this position, fall back to local
-  }
-  if(cloud){
+    const secsLeft = Math.max(1, Math.round((cloudBlockedUntil - Date.now())/1000));
+    document.getElementById('engineStatus').textContent = `engine: cloud rate-limited (${secsLeft}s) — using local`;
+  } else if(cloud){
     document.getElementById('engineStatus').textContent = 'engine: cloud eval';
     return cloud;
   }
