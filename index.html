@@ -88,7 +88,14 @@
   .sq.dark{ background: linear-gradient(160deg, #6b4a30 0%, #4f3520 100%); }
   .piece-svg{ width:82%; height:82%; filter: drop-shadow(0 3px 3px rgba(0,0,0,0.4)); }
 
-  .evalbar{ width:22px; align-self:stretch; background:var(--panel-2); border:1px solid var(--line); position:relative; overflow:hidden; border-radius:3px; flex-shrink:0;}
+  .evalbar{ width:22px; align-self:stretch; background:var(--panel-2); border:1px solid var(--line); position:relative; border-radius:3px; flex-shrink:0;}
+  .evalbar-label{
+    position:absolute; left:50%; transform:translateX(-50%);
+    font-size:9px; font-family:'IBM Plex Mono', monospace; font-weight:600;
+    color:var(--ink); background:var(--brass); padding:1px 3px; border-radius:2px;
+    white-space:nowrap; z-index:2; pointer-events:none;
+  }
+  button.compact-btn{ font-size:11px; padding:5px 9px; opacity:0.85; }
   .evalbar .fill{ position:absolute; bottom:0; left:0; width:100%; background:var(--parchment); transition:height 0.25s; }
   .evalbar .marker{ position:absolute; left:0; right:0; height:1px; background:var(--brass-dim); }
   .controls{ display:flex; gap:8px; justify-content:center; width:100%; max-width:820px; }
@@ -139,14 +146,12 @@
   }
   .stat-card .value{ font-family:'Fraunces', serif; font-size:26px; font-weight:600; color:var(--brass); line-height:1.1; }
   .stat-card .label{ font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim); margin-top:4px; }
-  .chart-bar-wrap{ display:flex; align-items:flex-end; gap:4px; height:180px; overflow-x:auto; padding-bottom:4px; }
-  .chart-bar{ flex:0 0 auto; width:22px; border-radius:3px 3px 0 0; position:relative; cursor:default; }
-  .chart-bar .chart-tip{
-    position:absolute; bottom:100%; left:50%; transform:translateX(-50%); margin-bottom:4px;
-    background:var(--panel); border:1px solid var(--line); padding:3px 6px; border-radius:3px;
-    font-size:10px; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity 0.1s;
+  .chart-bar-wrap{ display:flex; align-items:flex-end; gap:6px; height:210px; overflow-x:auto; padding-bottom:4px;
+    background-image: repeating-linear-gradient(to top, rgba(232,223,198,0.08) 0, rgba(232,223,198,0.08) 1px, transparent 1px, transparent 25%);
   }
-  .chart-bar:hover .chart-tip{ opacity:1; }
+  .chart-bar-col{ display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; flex:0 0 auto; }
+  .chart-bar{ width:24px; border-radius:3px 3px 0 0; }
+  .chart-bar-label{ font-size:10px; color:var(--text-dim); margin-top:5px; font-family:'IBM Plex Mono', monospace; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -207,12 +212,9 @@
   <section id="tab-analysis" class="panel hidden">
     <div id="analysisEmpty" class="empty">Pick a game from the Games tab to begin analysis.</div>
     <div id="analysisBody" class="hidden">
-      <div class="flex-between" style="margin-bottom:10px;">
+      <div class="flex-between" style="margin-bottom:10px; flex-wrap:wrap; gap:8px;">
         <div class="small" id="gameTitle"></div>
-        <div class="row" style="gap:8px;">
-          <span class="small">You are:</span>
-          <span class="pill" id="pillWhite">White</span>
-          <span class="pill" id="pillBlack">Black</span>
+        <div class="row" id="analysisControlsRow" style="gap:8px;">
           <select id="analysisSpeed">
             <option value="150">Quick</option>
             <option value="400" selected>Standard</option>
@@ -223,7 +225,7 @@
       </div>
       <div class="analysis-layout">
         <div class="board-col">
-          <div class="evalbar"><div class="fill" id="evalFill" style="height:50%;"></div></div>
+          <div class="evalbar"><div class="fill" id="evalFill" style="height:50%;"></div><span class="evalbar-label" id="evalBarLabel"></span></div>
           <div class="board-frame" id="boardFrame">
             <div class="board" id="board"></div>
           </div>
@@ -256,7 +258,7 @@
       </div>
       <div class="row" id="breakdownCards" style="margin-bottom:22px;"></div>
       <h3 style="margin-bottom:10px; font-size:16px;">Accuracy by game</h3>
-      <p class="small" style="margin-bottom:14px;">Accuracy is derived from average centipawn loss on your own moves, using the same formula Lichess uses. Ordered oldest → most recent, left to right.</p>
+      <p class="small" style="margin-bottom:14px;">Each bar is one analysed game, oldest to most recent, left to right. Taller = more accurate. Green ≥88%, amber ≥72%, red below that.</p>
       <div id="accuracyChart" style="margin-bottom:30px;"></div>
 
       <h3 style="margin-bottom:6px; font-size:16px;">Weaknesses vs. a typical player at your rating</h3>
@@ -406,7 +408,7 @@ async function runAutoAnalysis(){
     state.autoAnalysis[g.id] = {done:false};
     renderGameList();
     try{
-      await analyseGameQuick(g);
+      state.autoAnalysis[g.id] = await computeGameAnalysis(g, 150);
     }catch(e){
       console.warn('Auto-analysis failed for game', g.id, e);
       delete state.autoAnalysis[g.id];
@@ -422,14 +424,20 @@ function isGameUserWhite(g){
   return (g.players?.white?.user?.name || '').toLowerCase() === state.username.toLowerCase();
 }
 
-async function analyseGameQuick(g){
+// The one place per-position evaluation actually happens for a full game — used both by
+// background auto-analysis (Quick preset) and the manual "Analyse full game" button (any
+// preset). Whichever runs first caches per-ply evals so the other never needs to repeat it.
+async function computeGameAnalysis(g, movetimeMs, onProgress){
   const isUserWhite = isGameUserWhite(g);
   const sanMoves = parseMovesString(g.pgn || '');
   const {positions} = buildPositions(sanMoves);
+  const plyEvals = [];
   let prevCp = 0, blunders = 0, mistakes = 0, inaccuracies = 0, userLossSum = 0, userMoveCount = 0;
   let firstErrorPly = null;
   for(let ply=0; ply<positions.length; ply++){
-    const {cp} = await evaluatePosition(positions[ply], 150); // Quick preset — cloud eval covers most of this anyway
+    if(onProgress) onProgress(ply, positions.length);
+    const {cp} = await evaluatePosition(positions[ply], movetimeMs);
+    plyEvals.push(cp === undefined ? null : cp);
     if(cp === null || cp === undefined) continue; // leave prevCp as-is, skip this position
     if(ply>0){
       const moverIsWhite = (ply % 2 === 1);
@@ -453,10 +461,34 @@ async function analyseGameQuick(g){
   // If you never slipped, credit you with having held for every move you made.
   const firstErrorMove = firstErrorPly !== null ? Math.ceil(firstErrorPly/2) : (userMoveCount || null);
   const rating = (isUserWhite ? g.players?.white?.rating : g.players?.black?.rating) ?? null;
-  state.autoAnalysis[g.id] = {
+  return {
     blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true,
-    firstErrorMove, rating, speed: g.speed || null
+    firstErrorMove, rating, speed: g.speed || null, plyEvals
   };
+}
+
+// Turns a raw array of per-ply centipawn evals into the {ply: {cp, classification}} map the
+// board/move-list/eval-bar all read from.
+function classifyPlyEvals(plyEvals){
+  const moveEvals = {};
+  let prevCp = 0;
+  for(let ply=0; ply<plyEvals.length; ply++){
+    const cp = plyEvals[ply];
+    if(cp === null || cp === undefined){ moveEvals[ply] = {cp:null, tag:'—'}; continue; }
+    if(ply>0){
+      const moverIsWhite = (ply % 2 === 1);
+      const loss = moverIsWhite ? (prevCp - cp) : (cp - prevCp);
+      let classification = null, tag = '';
+      if(loss >= 300){ classification='blunder'; tag='blunder'; }
+      else if(loss >= 120){ classification='mistake'; tag='mistake'; }
+      else if(loss >= 50){ classification='inaccuracy'; tag='inaccuracy'; }
+      moveEvals[ply] = {cp, classification, tag};
+    } else {
+      moveEvals[0] = {cp};
+    }
+    prevCp = cp;
+  }
+  return moveEvals;
 }
 
 
@@ -496,13 +528,15 @@ function loadGameIntoAnalysis(g, isUserWhite){
   state.sanMoves = sanClean;
   state.ply = 0;
   state.userColor = isUserWhite ? 'white' : 'black';
-  state.moveEvals = {};
+
+  // Reuse cached analysis (from background auto-analysis, or a previous manual run) instead of
+  // making the person re-run "Analyse full game" for a game that's already been analysed.
+  const cached = state.autoAnalysis[g.id];
+  state.moveEvals = cached?.plyEvals ? classifyPlyEvals(cached.plyEvals) : {};
 
   document.getElementById('analysisEmpty').classList.add('hidden');
   document.getElementById('analysisBody').classList.remove('hidden');
-  document.getElementById('gameTitle').textContent =
-    `${g.players?.white?.user?.name||'anon'} vs ${g.players?.black?.user?.name||'anon'} — ${g.opening?.name||''}`;
-  setUserColorPill(state.userColor);
+  renderGameTitle(g);
 
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
   document.querySelector('.tab-btn[data-tab="analysis"]').classList.add('active');
@@ -512,15 +546,35 @@ function loadGameIntoAnalysis(g, isUserWhite){
   renderMovePanel();
   renderBoard();
   checkDeviation();
+  refreshAnalysisControls();
 }
 
-document.getElementById('pillWhite').addEventListener('click', ()=>setUserColorPill('white'));
-document.getElementById('pillBlack').addEventListener('click', ()=>setUserColorPill('black'));
-function setUserColorPill(color){
-  state.userColor = color;
-  document.getElementById('pillWhite').classList.toggle('active', color==='white');
-  document.getElementById('pillBlack').classList.toggle('active', color==='black');
+function renderGameTitle(g){
+  const whiteName = g.players?.white?.user?.name || 'anon';
+  const blackName = g.players?.black?.user?.name || 'anon';
+  document.getElementById('gameTitle').innerHTML =
+    `<span class="pill ${state.userColor==='white'?'active':''}" data-color="white">${whiteName}</span>` +
+    `<span class="small" style="margin:0 6px;">vs</span>` +
+    `<span class="pill ${state.userColor==='black'?'active':''}" data-color="black">${blackName}</span>` +
+    (g.opening?.name ? `<div class="small" style="margin-top:4px; opacity:0.75;">${g.opening.name}</div>` : '');
+}
+document.getElementById('gameTitle').addEventListener('click', (e)=>{
+  const pill = e.target.closest('[data-color]');
+  if(!pill || !state.currentGame) return;
+  state.userColor = pill.dataset.color;
+  renderGameTitle(state.currentGame);
   checkDeviation();
+});
+
+// Once a game already has cached analysis, the "Analyse full game" controls shrink out of the
+// way rather than sitting there implying analysis hasn't happened yet.
+function refreshAnalysisControls(){
+  const hasEvals = state.sanMoves.length > 0 && Object.keys(state.moveEvals).length > 1;
+  const speedEl = document.getElementById('analysisSpeed');
+  const btn = document.getElementById('runFullAnalysis');
+  speedEl.style.display = hasEvals ? 'none' : '';
+  btn.textContent = hasEvals ? 'Re-analyse' : 'Analyse full game';
+  btn.classList.toggle('compact-btn', hasEvals);
 }
 
 /* ---------------- BOARD RENDERING ---------------- */
@@ -594,11 +648,16 @@ function addSquare(boardEl, r, c, piece){
 function updateEvalBar(cp){
   const fill = document.getElementById('evalFill');
   const readout = document.getElementById('evalReadout');
-  if(cp === undefined || cp === null){ readout.textContent=''; return; }
+  const label = document.getElementById('evalBarLabel');
+  if(cp === undefined || cp === null){ readout.textContent=''; label.textContent=''; return; }
   const clamped = Math.max(-600, Math.min(600, cp));
   const pct = 50 + (clamped/600)*50;
   fill.style.height = pct + '%';
-  readout.textContent = (cp/100).toFixed(2);
+  const isMate = Math.abs(cp) >= 10000;
+  const text = isMate ? (cp>0 ? 'M+' : 'M−') : (cp>=0?'+':'') + (cp/100).toFixed(1);
+  readout.textContent = text;
+  label.textContent = text;
+  label.style.bottom = `calc(${pct}% - 8px)`;
 }
 
 /* ---------------- MOVE PANEL + NAV ---------------- */
@@ -778,33 +837,21 @@ function evaluatePosition(fen, movetimeMs=400){
 /* ---------------- FULL GAME ANALYSIS ---------------- */
 document.getElementById('runFullAnalysis').addEventListener('click', runFullAnalysis);
 async function runFullAnalysis(){
+  if(!state.currentGame) return;
   const btn = document.getElementById('runFullAnalysis');
   btn.disabled = true; btn.textContent = 'Analysing…';
-  let prevCp = 0;
   const movetime = parseInt(document.getElementById('analysisSpeed').value, 10);
-  for(let ply=0; ply<state.positions.length; ply++){
-    btn.textContent = `Analysing… (${ply}/${state.positions.length-1})`;
-    const {cp} = await evaluatePosition(state.positions[ply], movetime);
-    if(cp === null || cp === undefined){
-      state.moveEvals[ply] = {cp: null, tag: '—'};
-      continue; // leave prevCp as-is; skip this position but keep the loop moving
-    }
-    if(ply>0){
-      const moverIsWhite = (ply % 2 === 1); // ply1 = white's first move
-      const loss = moverIsWhite ? (prevCp - cp) : (cp - prevCp);
-      let classification = null, tag = '';
-      if(loss >= 300){ classification='blunder'; tag='blunder'; }
-      else if(loss >= 120){ classification='mistake'; tag='mistake'; }
-      else if(loss >= 50){ classification='inaccuracy'; tag='inaccuracy'; }
-      state.moveEvals[ply] = {cp, classification, tag};
-    } else {
-      state.moveEvals[0] = {cp};
-    }
-    prevCp = cp;
-  }
-  btn.disabled = false; btn.textContent = 'Analyse full game';
+  const result = await computeGameAnalysis(state.currentGame, movetime, (ply, total)=>{
+    btn.textContent = `Analysing… (${ply}/${total-1})`;
+  });
+  state.autoAnalysis[state.currentGame.id] = result;
+  state.moveEvals = classifyPlyEvals(result.plyEvals);
+  btn.disabled = false;
   renderMovePanel();
   renderBoard();
+  refreshAnalysisControls();
+  renderGameList();      // picks up the updated blunder/mistake badge if visible
+  renderBreakdown();     // keeps the Breakdown tab in sync if it's already been viewed
 }
 
 /* ---------------- BREAKDOWN ---------------- */
@@ -923,8 +970,12 @@ function renderBreakdown(){
     const pct = acc === null ? 4 : Math.max(4, acc);
     const color = acc === null ? 'var(--line)' : acc>=88 ? 'var(--good)' : acc>=72 ? 'var(--mid)' : 'var(--bad)';
     const dateLabel = a.createdAt ? new Date(a.createdAt).toLocaleDateString(undefined,{month:'short', day:'numeric'}) : `#${i+1}`;
-    const tip = acc === null ? `${dateLabel}: no data` : `${dateLabel}: ${acc.toFixed(1)}% (${a.result})`;
-    return `<div class="chart-bar" style="height:${pct}%; background:${color};"><span class="chart-tip">${tip}</span></div>`;
+    const pctLabel = acc === null ? '–' : Math.round(acc)+'%';
+    return `<div class="chart-bar-col">
+      <div class="chart-bar" style="height:${pct}%; background:${color};"></div>
+      <span class="chart-bar-label">${pctLabel}</span>
+      <span class="chart-bar-label" style="opacity:0.6;">${dateLabel}</span>
+    </div>`;
   }).join('');
   chartEl.innerHTML = `<div class="chart-bar-wrap">${bars}</div>`;
 
