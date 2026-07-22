@@ -84,9 +84,7 @@
   .sq.light{ background: linear-gradient(160deg, #f3e7c9 0%, #e6d3a6 100%); }
   .sq.dark{ background: linear-gradient(160deg, #6b4a30 0%, #4f3520 100%); }
   .piece-svg{ width:82%; height:82%; filter: drop-shadow(0 3px 3px rgba(0,0,0,0.4)); }
-  .coord-label{ position:absolute; font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--brass); opacity:0.9; pointer-events:none; letter-spacing:0.02em; text-shadow:0 1px 1px rgba(0,0,0,0.4); }
-  .file-label{ bottom:6px; transform:translateX(-50%); }
-  .rank-label{ left:6px; transform:translateY(-50%); }
+
   .evalbar{ width:22px; align-self:stretch; background:var(--panel-2); border:1px solid var(--line); position:relative; overflow:hidden; border-radius:3px; flex-shrink:0;}
   .evalbar .fill{ position:absolute; bottom:0; left:0; width:100%; background:var(--parchment); transition:height 0.25s; }
   .evalbar .marker{ position:absolute; left:0; right:0; height:1px; background:var(--brass-dim); }
@@ -123,6 +121,20 @@
     .analysis-layout{ flex-direction:column; }
     .board-col{ flex:1 1 auto; max-width:100%; width:100%; }
     .movepanel{ max-height:280px; width:100%; }
+  }
+
+  .board-overlay{
+    position:fixed; inset:0; z-index:1000; background:rgba(8,6,4,0.95);
+    display:flex; align-items:center; justify-content:center; padding:16px;
+  }
+  .board-overlay.hidden{ display:none; }
+  .board-overlay .board-frame{
+    flex:none !important; width:min(94vw, 94vh); max-width:min(94vw, 94vh);
+  }
+  .overlay-close{
+    position:fixed; top:16px; right:16px; z-index:1001;
+    background:var(--panel-2); border:1px solid var(--brass-dim); color:var(--text);
+    width:40px; height:40px; border-radius:50%; font-size:18px; cursor:pointer;
   }
 </style>
 </head>
@@ -201,6 +213,7 @@
               <button class="icon" id="btnPrev">◀</button>
               <button class="icon" id="btnNext">▶</button>
               <button class="icon" id="btnEnd">⏭</button>
+              <button class="icon" id="expandBoardBtn" title="Expand board">⤢</button>
               <span class="small" id="evalReadout" style="align-self:center; margin-left:8px;"></span>
             </div>
           </div>
@@ -213,6 +226,10 @@
       </div>
     </div>
   </section>
+
+  <div class="board-overlay hidden" id="boardOverlay">
+    <button class="overlay-close" id="closeOverlayBtn" title="Close">✕</button>
+  </div>
 
   <!-- REPERTOIRE TAB -->
   <section id="tab-repertoire" class="panel hidden">
@@ -486,7 +503,6 @@ async function renderBoard(){
       } else { addSquare(boardEl, r, c, ch); c++; }
     }
   }
-  renderCoordLabels();
   const evalCp = state.moveEvals[state.ply]?.cp;
   updateEvalBar(evalCp);
 }
@@ -508,27 +524,6 @@ function addSquare(boardEl, r, c, piece){
     }
   }
   boardEl.appendChild(div);
-}
-function renderCoordLabels(){
-  const frame = document.getElementById('boardFrame');
-  frame.querySelectorAll('.coord-label').forEach(el=>el.remove());
-  const files = 'abcdefgh';
-  const squares = document.querySelectorAll('#board .sq');
-  for(let c=0;c<8;c++){
-    // bottom row = rank 1, last row (r=7) squares
-    const bottomSq = squares[7*8 + c];
-    const fLabel = document.createElement('span');
-    fLabel.className = 'coord-label file-label';
-    fLabel.textContent = files[c];
-    bottomSq.appendChild(fLabel);
-  }
-  for(let r=0;r<8;r++){
-    const leftSq = squares[r*8]; // first column
-    const rLabel = document.createElement('span');
-    rLabel.className = 'coord-label rank-label';
-    rLabel.textContent = 8-r;
-    leftSq.appendChild(rLabel);
-  }
 }
 function updateEvalBar(cp){
   const fill = document.getElementById('evalFill');
@@ -567,6 +562,32 @@ document.getElementById('btnStart').addEventListener('click', ()=>{ state.ply=0;
 document.getElementById('btnEnd').addEventListener('click', ()=>{ state.ply=state.sanMoves.length; renderBoard(); highlightMove(); checkDeviation(); });
 document.getElementById('btnPrev').addEventListener('click', ()=>{ if(state.ply>0){state.ply--; renderBoard(); highlightMove(); checkDeviation();} });
 document.getElementById('btnNext').addEventListener('click', ()=>{ if(state.ply<state.sanMoves.length){state.ply++; renderBoard(); highlightMove(); checkDeviation();} });
+
+/* ---------------- EXPAND / FULLSCREEN BOARD ---------------- */
+let boardFrameHome = null; // remembers where to put the board back when collapsed
+function expandBoard(){
+  const frame = document.getElementById('boardFrame');
+  const overlay = document.getElementById('boardOverlay');
+  boardFrameHome = { parent: frame.parentNode, next: frame.nextSibling };
+  overlay.insertBefore(frame, overlay.firstChild);
+  overlay.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+function collapseBoard(){
+  const frame = document.getElementById('boardFrame');
+  const overlay = document.getElementById('boardOverlay');
+  if(boardFrameHome){
+    boardFrameHome.parent.insertBefore(frame, boardFrameHome.next);
+    boardFrameHome = null;
+  }
+  overlay.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+document.getElementById('expandBoardBtn').addEventListener('click', expandBoard);
+document.getElementById('closeOverlayBtn').addEventListener('click', collapseBoard);
+document.getElementById('boardOverlay').addEventListener('click', (e)=>{
+  if(e.target.id === 'boardOverlay') collapseBoard();
+});
 
 /* ---------------- STOCKFISH (client-side WASM/asm.js worker) ---------------- */
 let sfWorker = null;
