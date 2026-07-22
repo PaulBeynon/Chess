@@ -68,18 +68,20 @@
 
   /* board */
   .analysis-layout{ display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
-  .board-col{ display:flex; gap:14px; }
-  .board{ width:432px; height:432px; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr);
-    border:1px solid var(--line); }
-  .sq{ display:flex; align-items:center; justify-content:center; font-size:32px; user-select:none; position:relative;}
+  .board-col{ display:flex; gap:14px; width:100%; max-width:470px; }
+  .board{ width:100%; max-width:432px; aspect-ratio:1/1; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr);
+    border:2px solid var(--brass-dim); container-type: inline-size; margin:0 auto; }
+  .sq{ display:flex; align-items:center; justify-content:center; font-size:11.5cqw; line-height:1; user-select:none; position:relative;}
   .sq.light{ background:var(--parchment); }
   .sq.dark{ background:var(--moss); }
   .sq .coord{ position:absolute; bottom:2px; left:3px; font-size:9px; font-family:'IBM Plex Mono'; opacity:0.5; }
-  .evalbar{ width:22px; height:432px; background:var(--panel-2); border:1px solid var(--line); position:relative; overflow:hidden; border-radius:3px;}
+  .piece-white{ color:#faf6ea; text-shadow: -1px 0 0 #1a1108, 1px 0 0 #1a1108, 0 -1px 0 #1a1108, 0 1px 0 #1a1108, 0 2px 3px rgba(0,0,0,0.45); }
+  .piece-black{ color:#171009; text-shadow: -1px 0 0 #f4ecd8, 1px 0 0 #f4ecd8, 0 -1px 0 #f4ecd8, 0 1px 0 #f4ecd8, 0 2px 2px rgba(0,0,0,0.25); }
+  .evalbar{ width:20px; align-self:stretch; background:var(--panel-2); border:1px solid var(--line); position:relative; overflow:hidden; border-radius:3px; flex-shrink:0;}
   .evalbar .fill{ position:absolute; bottom:0; left:0; width:100%; background:var(--parchment); transition:height 0.25s; }
   .evalbar .marker{ position:absolute; left:0; right:0; height:1px; background:var(--brass-dim); }
-  .controls{ display:flex; gap:8px; margin-top:12px; }
-  .movepanel{ flex:1; min-width:280px; max-height:432px; overflow-y:auto; }
+  .controls{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .movepanel{ flex:1; min-width:240px; max-height:432px; overflow-y:auto; }
   .move-item{ display:flex; justify-content:space-between; padding:7px 10px; font-family:'IBM Plex Mono'; font-size:13px;
     border-left:3px solid transparent; cursor:pointer; }
   .move-item:hover{ background:var(--panel-2); }
@@ -370,7 +372,13 @@ function addSquare(boardEl, r, c, piece){
   const div = document.createElement('div');
   const isLight = (r+c) % 2 === 0;
   div.className = 'sq ' + (isLight ? 'light' : 'dark');
-  if(piece) div.textContent = PIECE_GLYPH[piece] || '';
+  if(piece){
+    const span = document.createElement('span');
+    const isWhitePiece = piece === piece.toUpperCase();
+    span.className = isWhitePiece ? 'piece-white' : 'piece-black';
+    span.textContent = PIECE_GLYPH[piece] || '';
+    div.appendChild(span);
+  }
   if(c===0){
     const coord = document.createElement('span');
     coord.className='coord'; coord.textContent = 8-r;
@@ -419,8 +427,10 @@ document.getElementById('btnNext').addEventListener('click', ()=>{ if(state.ply<
 /* ---------------- STOCKFISH (client-side WASM/asm.js worker) ---------------- */
 let sfWorker = null;
 let sfReady = null;
-const SF_JS_URL = 'https://cdn.jsdelivr.net/npm/stockfish@18.0.8/bin/stockfish-18-lite-single.js';
-const SF_WASM_URL = 'https://cdn.jsdelivr.net/npm/stockfish@18.0.8/bin/stockfish-18-lite-single.wasm';
+// Using the proven asm.js build here rather than the WASM single-threaded build: this path
+// only runs for the rare position Lichess's cloud eval doesn't have, so reliability matters
+// far more than raw speed for this fallback.
+const SF_JS_URL = 'https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js';
 
 async function initEngine(){
   if(sfReady) return sfReady;
@@ -429,23 +439,31 @@ async function initEngine(){
     const resp = await fetch(SF_JS_URL);
     const code = await resp.text();
     const blob = new Blob([code], {type:'application/javascript'});
-    const blobUrl = URL.createObjectURL(blob);
-    // This build resolves its own worker-ness and locates its .wasm file via the URL hash:
-    // "#<wasm-url>,worker". Without this it won't know where to fetch the wasm binary from
-    // once loaded via a blob: URL (which has no meaningful path of its own).
-    const workerUrl = blobUrl + '#' + encodeURIComponent(SF_WASM_URL) + ',worker';
-    sfWorker = new Worker(workerUrl);
-    await new Promise(resolve=>{
+    sfWorker = new Worker(URL.createObjectURL(blob));
+    sfWorker.onerror = (err)=>{ console.error('Stockfish worker error', err); };
+    await new Promise((resolve, reject)=>{
+      const timer = setTimeout(()=> reject(new Error('engine init timed out')), 15000);
       const onMsg = (e)=>{
         if(e.data === 'uciok'){ sfWorker.postMessage('isready'); }
-        if(e.data === 'readyok'){ sfWorker.removeEventListener('message', onMsg); resolve(); }
+        if(e.data === 'readyok'){ clearTimeout(timer); sfWorker.removeEventListener('message', onMsg); resolve(); }
       };
       sfWorker.addEventListener('message', onMsg);
       sfWorker.postMessage('uci');
     });
-    document.getElementById('engineStatus').textContent = 'engine: ready';
-  })();
+    document.getElementById('engineStatus').textContent = 'engine: ready (local)';
+  })().catch(err=>{
+    sfReady = null; // allow retry later instead of staying permanently broken
+    document.getElementById('engineStatus').textContent = 'engine: unavailable';
+    throw err;
+  });
   return sfReady;
+}
+
+function withTimeout(promise, ms, fallbackValue){
+  return new Promise((resolve)=>{
+    const timer = setTimeout(()=> resolve(fallbackValue), ms);
+    promise.then(v=>{ clearTimeout(timer); resolve(v); }, ()=>{ clearTimeout(timer); resolve(fallbackValue); });
+  });
 }
 
 function evaluateFenLocal(fen, movetimeMs=400){
@@ -500,7 +518,12 @@ async function evaluatePosition(fen, movetimeMs=400){
     return cloud;
   }
   document.getElementById('engineStatus').textContent = 'engine: local (uncached position)';
-  return await evaluateFenLocal(fen, movetimeMs);
+  const result = await withTimeout(evaluateFenLocal(fen, movetimeMs), 20000, null);
+  if(result === null){
+    document.getElementById('engineStatus').textContent = 'engine: skipped (unavailable)';
+    return {cp: null, bestMove: null, source: 'unavailable'};
+  }
+  return result;
 }
 
 /* ---------------- FULL GAME ANALYSIS ---------------- */
@@ -513,6 +536,10 @@ async function runFullAnalysis(){
   for(let ply=0; ply<state.positions.length; ply++){
     btn.textContent = `Analysing… (${ply}/${state.positions.length-1})`;
     const {cp} = await evaluatePosition(state.positions[ply], movetime);
+    if(cp === null || cp === undefined){
+      state.moveEvals[ply] = {cp: null, tag: '—'};
+      continue; // leave prevCp as-is; skip this position but keep the loop moving
+    }
     if(ply>0){
       const moverIsWhite = (ply % 2 === 1); // ply1 = white's first move
       const loss = moverIsWhite ? (prevCp - cp) : (cp - prevCp);
