@@ -53,7 +53,10 @@
   }
   button.btn.ghost{ background:transparent; border:1px solid var(--brass-dim); color:var(--brass); }
   button.btn:disabled{ opacity:0.4; cursor:default; }
-  button.icon{ background:var(--panel-2); border:1px solid var(--line); color:var(--text); border-radius:4px; padding:7px 12px; cursor:pointer; font-family:'IBM Plex Mono';}
+  button.icon{ background:var(--panel-2); border:1px solid var(--line); color:var(--text); border-radius:4px; padding:7px 12px; cursor:pointer; font-family:'IBM Plex Mono'; min-width:44px; min-height:44px; touch-action:manipulation;}
+  button.icon.play-btn{ background:var(--good); border-color:var(--good); color:#0f1c17; font-weight:600; font-size:16px; }
+  button.icon.play-btn:active{ transform:scale(0.95); }
+  html{ touch-action:manipulation; }
   .gamelist{ margin-top:18px; display:flex; flex-direction:column; gap:1px; }
   .gamerow{
     display:flex; justify-content:space-between; align-items:center; padding:12px 14px;
@@ -91,8 +94,12 @@
   .controls{ display:flex; gap:8px; justify-content:center; width:100%; max-width:820px; }
 
   /* two-column scoresheet-style move table: number | white | black, revealed progressively */
+  .move-table-wrap{
+    width:100%; max-width:520px; max-height:220px; overflow-y:auto;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:8px 10px;
+  }
   .move-table{
-    width:100%; max-width:520px; display:grid; grid-template-columns:40px 1fr 1fr;
+    width:100%; display:grid; grid-template-columns:40px 1fr 1fr;
     gap:2px 6px; font-family:'IBM Plex Mono', monospace; font-size:14px;
   }
   .move-num{ color:var(--text-dim); text-align:right; padding:7px 4px; }
@@ -125,6 +132,21 @@
     .wrap{ padding:20px 12px 40px; }
     .panel{ padding:14px; }
   }
+
+  .stat-card{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
+    padding:14px 18px; min-width:130px; flex:1;
+  }
+  .stat-card .value{ font-family:'Fraunces', serif; font-size:26px; font-weight:600; color:var(--brass); line-height:1.1; }
+  .stat-card .label{ font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim); margin-top:4px; }
+  .chart-bar-wrap{ display:flex; align-items:flex-end; gap:4px; height:180px; overflow-x:auto; padding-bottom:4px; }
+  .chart-bar{ flex:0 0 auto; width:22px; border-radius:3px 3px 0 0; position:relative; cursor:default; }
+  .chart-bar .chart-tip{
+    position:absolute; bottom:100%; left:50%; transform:translateX(-50%); margin-bottom:4px;
+    background:var(--panel); border:1px solid var(--line); padding:3px 6px; border-radius:3px;
+    font-size:10px; white-space:nowrap; opacity:0; pointer-events:none; transition:opacity 0.1s;
+  }
+  .chart-bar:hover .chart-tip{ opacity:1; }
 </style>
 </head>
 <body>
@@ -140,6 +162,7 @@
   <nav class="tabs">
     <button class="tab-btn active" data-tab="games">Games</button>
     <button class="tab-btn" data-tab="analysis">Analysis</button>
+    <button class="tab-btn" data-tab="breakdown">Breakdown</button>
     <button class="tab-btn" data-tab="repertoire">Repertoire</button>
   </nav>
 
@@ -201,15 +224,28 @@
           <button class="icon" id="btnStart">⏮</button>
           <button class="icon" id="btnPrev">◀</button>
           <button class="icon" id="btnEnd">⏭</button>
-          <button class="icon" id="btnNextBig" style="margin-left:auto;">▶</button>
+          <button class="icon play-btn" id="btnNextBig" style="margin-left:auto;">▶</button>
           <span class="small" id="evalReadout" style="align-self:center; margin-left:8px;"></span>
         </div>
-        <div class="move-table" id="movePanel"></div>
+        <div class="move-table-wrap" id="movePanelWrap">
+          <div class="move-table" id="movePanel"></div>
+        </div>
       </div>
       <div class="deviation-banner hidden" id="deviationBanner">
         <p id="deviationText"></p>
         <button class="btn" id="addToRepertoireBtn">Add to my repertoire</button>
       </div>
+    </div>
+  </section>
+
+  <!-- BREAKDOWN TAB -->
+  <section id="tab-breakdown" class="panel hidden">
+    <div id="breakdownEmpty" class="empty">Auto-analyse some games from the Games tab first — this fills in once you have analysed games.</div>
+    <div id="breakdownBody" class="hidden">
+      <div class="row" id="breakdownCards" style="margin-bottom:22px;"></div>
+      <h3 style="margin-bottom:10px; font-size:16px;">Accuracy by game</h3>
+      <p class="small" style="margin-bottom:14px;">Accuracy is derived from average centipawn loss on your own moves, using the same formula Lichess uses. Ordered oldest → most recent, left to right.</p>
+      <div id="accuracyChart"></div>
     </div>
   </section>
 
@@ -264,6 +300,7 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
     btn.classList.add('active');
     document.getElementById('tab-'+btn.dataset.tab).classList.remove('hidden');
     if(btn.dataset.tab === 'repertoire') renderRepTree();
+    if(btn.dataset.tab === 'breakdown') renderBreakdown();
   });
 });
 
@@ -352,29 +389,44 @@ async function runAutoAnalysis(){
       delete state.autoAnalysis[g.id];
     }
     renderGameList();
+    renderBreakdown();
   }
   statusEl.textContent = `Auto-analysis complete (${games.length} games).`;
   state.autoAnalysisRunning = false;
 }
 
+function isGameUserWhite(g){
+  return (g.players?.white?.user?.name || '').toLowerCase() === state.username.toLowerCase();
+}
+
 async function analyseGameQuick(g){
+  const isUserWhite = isGameUserWhite(g);
   const sanMoves = parseMovesString(g.pgn || '');
   const {positions} = buildPositions(sanMoves);
-  let prevCp = 0, blunders = 0, mistakes = 0, inaccuracies = 0;
+  let prevCp = 0, blunders = 0, mistakes = 0, inaccuracies = 0, userLossSum = 0, userMoveCount = 0;
   for(let ply=0; ply<positions.length; ply++){
     const {cp} = await evaluatePosition(positions[ply], 150); // Quick preset — cloud eval covers most of this anyway
     if(cp === null || cp === undefined) continue; // leave prevCp as-is, skip this position
     if(ply>0){
       const moverIsWhite = (ply % 2 === 1);
-      const loss = moverIsWhite ? (prevCp - cp) : (cp - prevCp);
-      if(loss >= 300) blunders++;
-      else if(loss >= 120) mistakes++;
-      else if(loss >= 50) inaccuracies++;
+      const moverIsUser = (moverIsWhite === isUserWhite);
+      if(moverIsUser){
+        const loss = moverIsWhite ? (prevCp - cp) : (cp - prevCp);
+        const clampedLoss = Math.max(0, Math.min(loss, 1000)); // avoid mate-score swings dominating the average
+        userLossSum += clampedLoss;
+        userMoveCount++;
+        if(loss >= 300) blunders++;
+        else if(loss >= 120) mistakes++;
+        else if(loss >= 50) inaccuracies++;
+      }
     }
     prevCp = cp;
   }
-  state.autoAnalysis[g.id] = {blunders, mistakes, inaccuracies, done:true};
+  const acpl = userMoveCount > 0 ? Math.round(userLossSum / userMoveCount) : null;
+  const result = !g.winner ? 'draw' : ((g.winner === 'white') === isUserWhite ? 'win' : 'loss');
+  state.autoAnalysis[g.id] = { blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true };
 }
+
 
 /* ---------------- PGN / MOVE PARSING ---------------- */
 function parseMovesString(pgnText){
@@ -551,6 +603,8 @@ function renderMovePanel(){
     }
   }
   panel.innerHTML = html;
+  const wrap = document.getElementById('movePanelWrap');
+  wrap.scrollTop = wrap.scrollHeight; // keep the latest move in view as the game progresses
 }
 document.getElementById('movePanel').addEventListener('click', (e)=>{
   const cell = e.target.closest('[data-ply]');
@@ -715,6 +769,63 @@ async function runFullAnalysis(){
   btn.disabled = false; btn.textContent = 'Analyse full game';
   renderMovePanel();
   renderBoard();
+}
+
+/* ---------------- BREAKDOWN ---------------- */
+// Standard Lichess-style conversion from average centipawn loss to an accuracy percentage.
+function acplToAccuracy(acpl){
+  if(acpl === null || acpl === undefined) return null;
+  const acc = 103.1668 * Math.exp(-0.04354 * acpl) - 3.1669;
+  return Math.max(0, Math.min(100, acc));
+}
+function renderBreakdown(){
+  const analysed = Object.entries(state.autoAnalysis)
+    .filter(([id, a]) => a.done)
+    .map(([id, a]) => a)
+    .sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  const emptyEl = document.getElementById('breakdownEmpty');
+  const bodyEl = document.getElementById('breakdownBody');
+  if(analysed.length === 0){
+    emptyEl.classList.remove('hidden');
+    bodyEl.classList.add('hidden');
+    return;
+  }
+  emptyEl.classList.add('hidden');
+  bodyEl.classList.remove('hidden');
+
+  const totalGames = analysed.length;
+  const wins = analysed.filter(a=>a.result==='win').length;
+  const draws = analysed.filter(a=>a.result==='draw').length;
+  const totalBlunders = analysed.reduce((s,a)=>s+a.blunders,0);
+  const totalMistakes = analysed.reduce((s,a)=>s+a.mistakes,0);
+  const totalInaccuracies = analysed.reduce((s,a)=>s+a.inaccuracies,0);
+  const acplGames = analysed.filter(a=>a.acpl !== null);
+  const avgAcpl = acplGames.length ? Math.round(acplGames.reduce((s,a)=>s+a.acpl,0)/acplGames.length) : null;
+  const avgAccuracy = acplToAccuracy(avgAcpl);
+
+  const cards = [
+    {value: totalGames, label:'Games analysed'},
+    {value: `${wins}-${totalGames-wins-draws}-${draws}`, label:'Record (W-L-D)'},
+    {value: avgAccuracy !== null ? avgAccuracy.toFixed(1)+'%' : '—', label:'Avg accuracy'},
+    {value: (totalBlunders/totalGames).toFixed(1), label:'Avg blunders / game'},
+    {value: (totalMistakes/totalGames).toFixed(1), label:'Avg mistakes / game'},
+    {value: (totalInaccuracies/totalGames).toFixed(1), label:'Avg inaccuracies / game'},
+  ];
+  document.getElementById('breakdownCards').innerHTML = cards.map(c=>
+    `<div class="stat-card"><div class="value">${c.value}</div><div class="label">${c.label}</div></div>`
+  ).join('');
+
+  const chartEl = document.getElementById('accuracyChart');
+  const bars = analysed.map((a, i)=>{
+    const acc = acplToAccuracy(a.acpl);
+    const pct = acc === null ? 4 : Math.max(4, acc); // tiny stub bar if no acpl data
+    const color = acc === null ? 'var(--line)' : acc>=88 ? 'var(--good)' : acc>=72 ? 'var(--mid)' : 'var(--bad)';
+    const dateLabel = a.createdAt ? new Date(a.createdAt).toLocaleDateString(undefined,{month:'short', day:'numeric'}) : `#${i+1}`;
+    const tip = acc === null ? `${dateLabel}: no data` : `${dateLabel}: ${acc.toFixed(1)}% (${a.result})`;
+    return `<div class="chart-bar" style="height:${pct}%; background:${color};"><span class="chart-tip">${tip}</span></div>`;
+  }).join('');
+  chartEl.innerHTML = `<div class="chart-bar-wrap">${bars}</div>`;
 }
 
 /* ---------------- REPERTOIRE ---------------- */
