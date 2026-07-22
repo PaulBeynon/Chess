@@ -611,32 +611,36 @@ function renderMovePanel(){
     panel.innerHTML = '<div class="empty">Moves will appear here as you step through with ▶</div>';
     return;
   }
-  let html = '';
+  const rows = [];
   for(let i=0; i<state.sanMoves.length; i+=2){
     const whitePly = i+1, blackPly = i+2;
     if(whitePly > visiblePlies) break;
-    const moveNum = Math.floor(i/2)+1;
+    rows.push({ i, moveNum: Math.floor(i/2)+1, whitePly, blackPly });
+  }
+  rows.reverse(); // latest move-pair first, so it sits right under the board with no scrolling needed
 
-    const whiteEval = state.moveEvals[whitePly];
+  let html = '';
+  for(const r of rows){
+    const whiteEval = state.moveEvals[r.whitePly];
     const whiteClasses = ['move-cell'];
-    if(whitePly === state.ply) whiteClasses.push('current');
+    if(r.whitePly === state.ply) whiteClasses.push('current');
     if(whiteEval?.classification) whiteClasses.push(whiteEval.classification);
-    html += `<span class="move-num">${moveNum}.</span>`;
-    html += `<span class="${whiteClasses.join(' ')}" data-ply="${whitePly}">${state.sanMoves[i]}</span>`;
+    html += `<span class="move-num">${r.moveNum}.</span>`;
+    html += `<span class="${whiteClasses.join(' ')}" data-ply="${r.whitePly}">${state.sanMoves[r.i]}</span>`;
 
-    if(blackPly <= visiblePlies && state.sanMoves[i+1]){
-      const blackEval = state.moveEvals[blackPly];
+    if(r.blackPly <= visiblePlies && state.sanMoves[r.i+1]){
+      const blackEval = state.moveEvals[r.blackPly];
       const blackClasses = ['move-cell'];
-      if(blackPly === state.ply) blackClasses.push('current');
+      if(r.blackPly === state.ply) blackClasses.push('current');
       if(blackEval?.classification) blackClasses.push(blackEval.classification);
-      html += `<span class="${blackClasses.join(' ')}" data-ply="${blackPly}">${state.sanMoves[i+1]}</span>`;
+      html += `<span class="${blackClasses.join(' ')}" data-ply="${r.blackPly}">${state.sanMoves[r.i+1]}</span>`;
     } else {
       html += `<span class="move-cell pending"></span>`;
     }
   }
   panel.innerHTML = html;
   const wrap = document.getElementById('movePanelWrap');
-  wrap.scrollTop = wrap.scrollHeight; // keep the latest move in view as the game progresses
+  wrap.scrollTop = 0; // latest move is now always at the top
 }
 document.getElementById('movePanel').addEventListener('click', (e)=>{
   const cell = e.target.closest('[data-ply]');
