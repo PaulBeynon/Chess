@@ -89,6 +89,20 @@
   .evalbar .fill{ position:absolute; bottom:0; left:0; width:100%; background:var(--parchment); transition:height 0.25s; }
   .evalbar .marker{ position:absolute; left:0; right:0; height:1px; background:var(--brass-dim); }
   .controls{ display:flex; gap:8px; justify-content:center; width:100%; max-width:820px; }
+  .big-next{
+    position:absolute; bottom:-26px; right:-26px; z-index:6;
+    width:76px; height:76px; border-radius:50%;
+    background: radial-gradient(circle at 35% 30%, #e6c374, var(--brass) 70%);
+    color:#1a1305; font-size:26px; border:3px solid var(--ink);
+    box-shadow: 0 12px 26px rgba(0,0,0,0.55), 0 0 0 1px rgba(201,162,75,0.5);
+    cursor:pointer; display:flex; align-items:center; justify-content:center;
+    transition: transform 0.12s ease;
+  }
+  .big-next:hover{ transform: scale(1.06); }
+  .big-next:active{ transform: scale(0.96); }
+  @media (max-width: 500px){
+    .big-next{ width:64px; height:64px; font-size:22px; bottom:-18px; right:-18px; }
+  }
 
   /* two-column scoresheet-style move table: number | white | black, revealed progressively */
   .move-table{
@@ -195,12 +209,12 @@
           <div class="evalbar"><div class="fill" id="evalFill" style="height:50%;"></div></div>
           <div class="board-frame" id="boardFrame">
             <div class="board" id="board"></div>
+            <button class="big-next" id="btnNextBig" title="Next move" aria-label="Next move">▶</button>
           </div>
         </div>
         <div class="controls">
           <button class="icon" id="btnStart">⏮</button>
           <button class="icon" id="btnPrev">◀</button>
-          <button class="icon" id="btnNext">▶</button>
           <button class="icon" id="btnEnd">⏭</button>
           <span class="small" id="evalReadout" style="align-self:center; margin-left:8px;"></span>
         </div>
@@ -561,7 +575,7 @@ document.getElementById('movePanel').addEventListener('click', (e)=>{
 document.getElementById('btnStart').addEventListener('click', ()=>{ state.ply=0; renderBoard(); renderMovePanel(); checkDeviation(); });
 document.getElementById('btnEnd').addEventListener('click', ()=>{ state.ply=state.sanMoves.length; renderBoard(); renderMovePanel(); checkDeviation(); });
 document.getElementById('btnPrev').addEventListener('click', ()=>{ if(state.ply>0){state.ply--; renderBoard(); renderMovePanel(); checkDeviation();} });
-document.getElementById('btnNext').addEventListener('click', ()=>{ if(state.ply<state.sanMoves.length){state.ply++; renderBoard(); renderMovePanel(); checkDeviation();} });
+document.getElementById('btnNextBig').addEventListener('click', ()=>{ if(state.ply<state.sanMoves.length){state.ply++; renderBoard(); renderMovePanel(); checkDeviation();} });
 
 /* ---------------- STOCKFISH (client-side WASM/asm.js worker) ---------------- */
 let sfWorker = null;
