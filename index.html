@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledger — Chess Coach</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0f1c17;
+    --panel:#16241e;
+    --panel-2:#1d2f27;
+    --line: rgba(232,223,198,0.12);
+    --parchment:#e8dfc6;
+    --moss:#4a6350;
+    --brass:#c9a24b;
+    --brass-dim: rgba(201,162,75,0.35);
+    --text:#f2ede1;
+    --text-dim:#a9b6ac;
+    --good:#7fae7a;
+    --mid:#d9b354;
+    --bad:#c1533f;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--ink); color:var(--text);
+    font-family:'IBM Plex Sans', sans-serif;
+    min-height:100vh;
+  }
+  h1,h2,h3{ font-family:'Fraunces', serif; font-weight:600; margin:0; }
+  .wrap{ max-width:1100px; margin:0 auto; padding:28px 20px 60px; }
+  header.top{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:22px; flex-wrap:wrap; gap:10px;}
+  header.top h1{ font-size:28px; letter-spacing:0.2px; }
+  header.top .sub{ color:var(--text-dim); font-size:13px; font-family:'IBM Plex Mono', monospace; }
+  nav.tabs{ display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:22px; }
+  nav.tabs button{
+    background:none; border:none; color:var(--text-dim); font-family:'IBM Plex Sans';
+    font-size:14px; padding:10px 16px; cursor:pointer; border-bottom:2px solid transparent;
+  }
+  nav.tabs button.active{ color:var(--brass); border-bottom-color:var(--brass); }
+  .panel{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:20px; }
+  .row{ display:flex; gap:16px; flex-wrap:wrap; }
+  label{ font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-dim); display:block; margin-bottom:6px;}
+  input[type=text], select, textarea{
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    padding:9px 11px; border-radius:4px; font-family:'IBM Plex Mono', monospace; font-size:13px;
+  }
+  textarea{ width:100%; min-height:110px; resize:vertical; }
+  button.btn{
+    background:var(--brass); color:#1a1305; border:none; padding:9px 16px; border-radius:4px;
+    font-family:'IBM Plex Sans'; font-weight:600; font-size:13px; cursor:pointer;
+  }
+  button.btn.ghost{ background:transparent; border:1px solid var(--brass-dim); color:var(--brass); }
+  button.btn:disabled{ opacity:0.4; cursor:default; }
+  button.icon{ background:var(--panel-2); border:1px solid var(--line); color:var(--text); border-radius:4px; padding:7px 12px; cursor:pointer; font-family:'IBM Plex Mono';}
+  .gamelist{ margin-top:18px; display:flex; flex-direction:column; gap:1px; }
+  .gamerow{
+    display:flex; justify-content:space-between; align-items:center; padding:12px 14px;
+    background:var(--panel-2); border-left:3px solid transparent; cursor:pointer;
+  }
+  .gamerow:hover{ border-left-color:var(--brass); }
+  .gamerow .meta{ font-size:12px; color:var(--text-dim); font-family:'IBM Plex Mono'; }
+  .badge{ font-family:'IBM Plex Mono'; font-size:11px; padding:2px 7px; border-radius:3px; }
+  .badge.win{ background:rgba(127,174,122,0.18); color:var(--good); }
+  .badge.loss{ background:rgba(193,83,63,0.18); color:var(--bad); }
+  .badge.draw{ background:rgba(217,179,84,0.18); color:var(--mid); }
+
+  /* board */
+  .analysis-layout{ display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+  .board-col{ display:flex; gap:14px; }
+  .board{ width:432px; height:432px; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr);
+    border:1px solid var(--line); }
+  .sq{ display:flex; align-items:center; justify-content:center; font-size:32px; user-select:none; position:relative;}
+  .sq.light{ background:var(--parchment); }
+  .sq.dark{ background:var(--moss); }
+  .sq .coord{ position:absolute; bottom:2px; left:3px; font-size:9px; font-family:'IBM Plex Mono'; opacity:0.5; }
+  .evalbar{ width:22px; height:432px; background:var(--panel-2); border:1px solid var(--line); position:relative; overflow:hidden; border-radius:3px;}
+  .evalbar .fill{ position:absolute; bottom:0; left:0; width:100%; background:var(--parchment); transition:height 0.25s; }
+  .evalbar .marker{ position:absolute; left:0; right:0; height:1px; background:var(--brass-dim); }
+  .controls{ display:flex; gap:8px; margin-top:12px; }
+  .movepanel{ flex:1; min-width:280px; max-height:432px; overflow-y:auto; }
+  .move-item{ display:flex; justify-content:space-between; padding:7px 10px; font-family:'IBM Plex Mono'; font-size:13px;
+    border-left:3px solid transparent; cursor:pointer; }
+  .move-item:hover{ background:var(--panel-2); }
+  .move-item.current{ background:var(--panel-2); border-left-color:var(--brass); }
+  .move-item.blunder{ color:var(--bad); }
+  .move-item.mistake{ color:var(--mid); }
+  .move-item.inaccuracy{ color:#c9b98a; }
+  .deviation-banner{
+    margin-top:14px; padding:14px 16px; background:rgba(201,162,75,0.09); border:1px solid var(--brass-dim);
+    border-radius:5px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
+  }
+  .deviation-banner p{ margin:0; font-size:13px; }
+  .tree{ font-family:'IBM Plex Mono'; font-size:13px; line-height:1.9; }
+  .tree ul{ list-style:none; margin:0; padding-left:18px; border-left:1px dashed var(--line); }
+  .tree li{ position:relative; }
+  .tree .mv{ cursor:default; color:var(--text); }
+  .tree .mv:hover{ color:var(--brass); }
+  .small{ font-size:12px; color:var(--text-dim); }
+  .flex-between{ display:flex; justify-content:space-between; align-items:center; }
+  .pill{ font-family:'IBM Plex Mono'; font-size:11px; padding:3px 9px; border-radius:20px; border:1px solid var(--line); color:var(--text-dim); cursor:pointer;}
+  .pill.active{ border-color:var(--brass); color:var(--brass); }
+  .hidden{ display:none !important; }
+  .empty{ color:var(--text-dim); font-size:13px; padding:30px 0; text-align:center; }
+  a{ color:var(--brass); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Ledger</h1>
+      <div class="sub">a private chess study, built for one player</div>
+    </div>
+    <div class="sub" id="engineStatus">engine: idle</div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="games">Games</button>
+    <button class="tab-btn" data-tab="analysis">Analysis</button>
+    <button class="tab-btn" data-tab="repertoire">Repertoire</button>
+  </nav>
+
+  <!-- GAMES TAB -->
+  <section id="tab-games" class="panel">
+    <div class="row" style="align-items:flex-end;">
+      <div>
+        <label for="lichessUser">Lichess username</label>
+        <input type="text" id="lichessUser" placeholder="e.g. DrNykterstein">
+      </div>
+      <div>
+        <label for="maxGames">Games to fetch</label>
+        <input type="text" id="maxGames" value="20" style="width:70px;">
+      </div>
+      <button class="btn" id="fetchGamesBtn">Fetch games</button>
+      <span class="small" id="fetchStatus"></span>
+    </div>
+    <div class="gamelist" id="gameList"></div>
+  </section>
+
+  <!-- ANALYSIS TAB -->
+  <section id="tab-analysis" class="panel hidden">
+    <div id="analysisEmpty" class="empty">Pick a game from the Games tab to begin analysis.</div>
+    <div id="analysisBody" class="hidden">
+      <div class="flex-between" style="margin-bottom:10px;">
+        <div class="small" id="gameTitle"></div>
+        <div class="row" style="gap:8px;">
+          <span class="small">You are:</span>
+          <span class="pill" id="pillWhite">White</span>
+          <span class="pill" id="pillBlack">Black</span>
+          <select id="analysisSpeed">
+            <option value="150">Quick</option>
+            <option value="400" selected>Standard</option>
+            <option value="1000">Deep</option>
+          </select>
+          <button class="btn ghost" id="runFullAnalysis">Analyse full game</button>
+        </div>
+      </div>
+      <div class="analysis-layout">
+        <div class="board-col">
+          <div class="evalbar"><div class="fill" id="evalFill" style="height:50%;"></div></div>
+          <div>
+            <div class="board" id="board"></div>
+            <div class="controls">
+              <button class="icon" id="btnStart">⏮</button>
+              <button class="icon" id="btnPrev">◀</button>
+              <button class="icon" id="btnNext">▶</button>
+              <button class="icon" id="btnEnd">⏭</button>
+              <span class="small" id="evalReadout" style="align-self:center; margin-left:8px;"></span>
+            </div>
+          </div>
+        </div>
+        <div class="movepanel" id="movePanel"></div>
+      </div>
+      <div class="deviation-banner hidden" id="deviationBanner">
+        <p id="deviationText"></p>
+        <button class="btn" id="addToRepertoireBtn">Add to my repertoire</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- REPERTOIRE TAB -->
+  <section id="tab-repertoire" class="panel hidden">
+    <div class="row" style="margin-bottom:16px;">
+      <span class="pill active" id="repWhitePill">White repertoire</span>
+      <span class="pill" id="repBlackPill">Black repertoire</span>
+    </div>
+    <div class="row" style="align-items:flex-start; gap:24px;">
+      <div style="flex:1; min-width:260px;">
+        <div class="tree" id="repTree"></div>
+      </div>
+      <div style="flex:1; min-width:280px;">
+        <label for="pgnImport">Import PGN or Lichess study (paste PGN text)</label>
+        <textarea id="pgnImport" placeholder="1. e4 c5 2. Nf3 d6 3. d4 cxd4 ..."></textarea>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn" id="importPgnBtn">Merge into repertoire</button>
+          <button class="btn ghost" id="clearRepBtn">Clear this repertoire</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script>
+/* ---------------- STATE ---------------- */
+const state = {
+  username: localStorage.getItem('ledger_username') || '',
+  games: [],
+  currentGame: null,     // {white, black, result, opening, sanMoves: []}
+  positions: [],         // fens after each ply, index 0 = start
+  ply: 0,
+  userColor: 'white',
+  moveEvals: {},         // ply -> {cp, classification}
+  repertoire: JSON.parse(localStorage.getItem('ledger_repertoire') || '{"white":{},"black":{}}'),
+  repColor: 'white'
+};
+
+/* ---------------- TABS ---------------- */
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('section[id^="tab-"]').forEach(s=>s.classList.add('hidden'));
+    btn.classList.add('active');
+    document.getElementById('tab-'+btn.dataset.tab).classList.remove('hidden');
+    if(btn.dataset.tab === 'repertoire') renderRepTree();
+  });
+});
+
+/* ---------------- LICHESS IMPORT ---------------- */
+document.getElementById('lichessUser').value = state.username;
+
+document.getElementById('fetchGamesBtn').addEventListener('click', fetchGames);
+
+async function fetchGames(){
+  const username = document.getElementById('lichessUser').value.trim();
+  const max = document.getElementById('maxGames').value.trim() || '20';
+  if(!username){ alert('Enter a lichess username'); return; }
+  state.username = username;
+  localStorage.setItem('ledger_username', username);
+  const status = document.getElementById('fetchStatus');
+  status.textContent = 'fetching…';
+  try{
+    const url = `https://lichess.org/api/games/user/${encodeURIComponent(username)}?max=${max}&opening=true&pgnInJson=true`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/x-ndjson' } });
+    if(!res.ok) throw new Error('Lichess responded ' + res.status);
+    const text = await res.text();
+    const lines = text.trim().split('\n').filter(Boolean);
+    state.games = lines.map(l => JSON.parse(l));
+    renderGameList();
+    status.textContent = `${state.games.length} games loaded`;
+  }catch(err){
+    console.error(err);
+    status.textContent = 'error: ' + err.message;
+  }
+}
+
+function renderGameList(){
+  const el = document.getElementById('gameList');
+  el.innerHTML = '';
+  state.games.forEach(g=>{
+    const white = g.players?.white?.user?.name || 'anon';
+    const black = g.players?.black?.user?.name || 'anon';
+    const isUserWhite = white.toLowerCase() === state.username.toLowerCase();
+    const userWon = g.winner && ((g.winner==='white') === isUserWhite);
+    const resultBadge = !g.winner ? '<span class="badge draw">draw</span>'
+      : userWon ? '<span class="badge win">win</span>' : '<span class="badge loss">loss</span>';
+    const row = document.createElement('div');
+    row.className = 'gamerow';
+    row.innerHTML = `
+      <div>
+        <div>${white} vs ${black}</div>
+        <div class="meta">${g.opening?.name || 'Unknown opening'} · ${g.speed || ''}</div>
+      </div>
+      <div style="text-align:right;">
+        ${resultBadge}
+        <div class="meta">${new Date(g.createdAt).toLocaleDateString()}</div>
+      </div>`;
+    row.addEventListener('click', ()=> loadGameIntoAnalysis(g, isUserWhite));
+    el.appendChild(row);
+  });
+}
+
+/* ---------------- PGN / MOVE PARSING ---------------- */
+function parseMovesString(pgnText){
+  // strip header tags like [Event "..."], comments, move numbers, result tokens
+  return pgnText
+    .replace(/^\s*\[.*\]\s*$/gm, '')
+    .replace(/\{[^}]*\}/g,'')
+    .replace(/\d+\.\.\./g,'')
+    .replace(/\d+\./g,'')
+    .replace(/(1-0|0-1|1\/2-1\/2|\*)\s*$/,'')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function buildPositions(sanMoves){
+  const chess = new Chess();
+  const positions = [chess.fen()];
+  const sanClean = [];
+  for(const san of sanMoves){
+    const mv = chess.move(san, {sloppy:true});
+    if(!mv) break;
+    sanClean.push(mv.san);
+    positions.push(chess.fen());
+  }
+  return {positions, sanClean};
+}
+
+/* ---------------- LOAD GAME INTO ANALYSIS ---------------- */
+function loadGameIntoAnalysis(g, isUserWhite){
+  const sanMoves = parseMovesString(g.pgn || '');
+  const {positions, sanClean} = buildPositions(sanMoves);
+  state.currentGame = g;
+  state.positions = positions;
+  state.sanMoves = sanClean;
+  state.ply = 0;
+  state.userColor = isUserWhite ? 'white' : 'black';
+  state.moveEvals = {};
+
+  document.getElementById('analysisEmpty').classList.add('hidden');
+  document.getElementById('analysisBody').classList.remove('hidden');
+  document.getElementById('gameTitle').textContent =
+    `${g.players?.white?.user?.name||'anon'} vs ${g.players?.black?.user?.name||'anon'} — ${g.opening?.name||''}`;
+  setUserColorPill(state.userColor);
+
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelector('.tab-btn[data-tab="analysis"]').classList.add('active');
+  document.querySelectorAll('section[id^="tab-"]').forEach(s=>s.classList.add('hidden'));
+  document.getElementById('tab-analysis').classList.remove('hidden');
+
+  renderMovePanel();
+  renderBoard();
+  checkDeviation();
+}
+
+document.getElementById('pillWhite').addEventListener('click', ()=>setUserColorPill('white'));
+document.getElementById('pillBlack').addEventListener('click', ()=>setUserColorPill('black'));
+function setUserColorPill(color){
+  state.userColor = color;
+  document.getElementById('pillWhite').classList.toggle('active', color==='white');
+  document.getElementById('pillBlack').classList.toggle('active', color==='black');
+  checkDeviation();
+}
+
+/* ---------------- BOARD RENDERING ---------------- */
+const PIECE_GLYPH = {
+  p:'♟', r:'♜', n:'♞', b:'♝', q:'♛', k:'♚',
+  P:'♙', R:'♖', N:'♘', B:'♗', Q:'♕', K:'♔'
+};
+function renderBoard(){
+  const fen = state.positions[state.ply];
+  const boardEl = document.getElementById('board');
+  boardEl.innerHTML = '';
+  const rows = fen.split(' ')[0].split('/');
+  for(let r=0;r<8;r++){
+    let c=0;
+    for(const ch of rows[r]){
+      if(/\d/.test(ch)){
+        for(let i=0;i<parseInt(ch);i++){ addSquare(boardEl, r, c, null); c++; }
+      } else { addSquare(boardEl, r, c, ch); c++; }
+    }
+  }
+  const evalCp = state.moveEvals[state.ply]?.cp;
+  updateEvalBar(evalCp);
+}
+function addSquare(boardEl, r, c, piece){
+  const div = document.createElement('div');
+  const isLight = (r+c) % 2 === 0;
+  div.className = 'sq ' + (isLight ? 'light' : 'dark');
+  if(piece) div.textContent = PIECE_GLYPH[piece] || '';
+  if(c===0){
+    const coord = document.createElement('span');
+    coord.className='coord'; coord.textContent = 8-r;
+    div.appendChild(coord);
+  }
+  boardEl.appendChild(div);
+}
+function updateEvalBar(cp){
+  const fill = document.getElementById('evalFill');
+  const readout = document.getElementById('evalReadout');
+  if(cp === undefined || cp === null){ readout.textContent=''; return; }
+  const clamped = Math.max(-600, Math.min(600, cp));
+  const pct = 50 + (clamped/600)*50;
+  fill.style.height = pct + '%';
+  readout.textContent = (cp/100).toFixed(2);
+}
+
+/* ---------------- MOVE PANEL + NAV ---------------- */
+function renderMovePanel(){
+  const panel = document.getElementById('movePanel');
+  panel.innerHTML = '';
+  for(let i=0;i<state.sanMoves.length;i++){
+    const ply = i+1;
+    const item = document.createElement('div');
+    item.className = 'move-item';
+    const evalInfo = state.moveEvals[ply];
+    if(evalInfo?.classification) item.classList.add(evalInfo.classification);
+    const moveNum = Math.floor(i/2)+1;
+    const label = (i%2===0 ? moveNum + '. ' : '') + state.sanMoves[i];
+    item.innerHTML = `<span>${label}</span><span class="small">${evalInfo?.tag || ''}</span>`;
+    item.addEventListener('click', ()=>{ state.ply = ply; renderBoard(); highlightMove(); checkDeviation(); });
+    panel.appendChild(item);
+  }
+  highlightMove();
+}
+function highlightMove(){
+  document.querySelectorAll('.move-item').forEach((el,i)=>{
+    el.classList.toggle('current', i+1 === state.ply);
+  });
+}
+document.getElementById('btnStart').addEventListener('click', ()=>{ state.ply=0; renderBoard(); highlightMove(); checkDeviation(); });
+document.getElementById('btnEnd').addEventListener('click', ()=>{ state.ply=state.sanMoves.length; renderBoard(); highlightMove(); checkDeviation(); });
+document.getElementById('btnPrev').addEventListener('click', ()=>{ if(state.ply>0){state.ply--; renderBoard(); highlightMove(); checkDeviation();} });
+document.getElementById('btnNext').addEventListener('click', ()=>{ if(state.ply<state.sanMoves.length){state.ply++; renderBoard(); highlightMove(); checkDeviation();} });
+
+/* ---------------- STOCKFISH (client-side WASM/asm.js worker) ---------------- */
+let sfWorker = null;
+let sfReady = null;
+const SF_JS_URL = 'https://cdn.jsdelivr.net/npm/stockfish@18.0.8/bin/stockfish-18-lite-single.js';
+const SF_WASM_URL = 'https://cdn.jsdelivr.net/npm/stockfish@18.0.8/bin/stockfish-18-lite-single.wasm';
+
+async function initEngine(){
+  if(sfReady) return sfReady;
+  document.getElementById('engineStatus').textContent = 'engine: loading…';
+  sfReady = (async ()=>{
+    const resp = await fetch(SF_JS_URL);
+    const code = await resp.text();
+    const blob = new Blob([code], {type:'application/javascript'});
+    const blobUrl = URL.createObjectURL(blob);
+    // This build resolves its own worker-ness and locates its .wasm file via the URL hash:
+    // "#<wasm-url>,worker". Without this it won't know where to fetch the wasm binary from
+    // once loaded via a blob: URL (which has no meaningful path of its own).
+    const workerUrl = blobUrl + '#' + encodeURIComponent(SF_WASM_URL) + ',worker';
+    sfWorker = new Worker(workerUrl);
+    await new Promise(resolve=>{
+      const onMsg = (e)=>{
+        if(e.data === 'uciok'){ sfWorker.postMessage('isready'); }
+        if(e.data === 'readyok'){ sfWorker.removeEventListener('message', onMsg); resolve(); }
+      };
+      sfWorker.addEventListener('message', onMsg);
+      sfWorker.postMessage('uci');
+    });
+    document.getElementById('engineStatus').textContent = 'engine: ready';
+  })();
+  return sfReady;
+}
+
+function evaluateFenLocal(fen, movetimeMs=400){
+  return new Promise(async (resolve)=>{
+    await initEngine();
+    let lastCp = null, lastMate = null, bestMove = null;
+    const onMsg = (e)=>{
+      const line = e.data;
+      if(typeof line !== 'string') return;
+      const cpMatch = line.match(/score cp (-?\d+)/);
+      const mateMatch = line.match(/score mate (-?\d+)/);
+      if(cpMatch) lastCp = parseInt(cpMatch[1]);
+      if(mateMatch) lastMate = parseInt(mateMatch[1]);
+      if(line.startsWith('bestmove')){
+        bestMove = line.split(' ')[1];
+        sfWorker.removeEventListener('message', onMsg);
+        // fen side-to-move perspective -> normalize to White's perspective
+        const stm = fen.split(' ')[1];
+        let cp = lastMate !== null ? (lastMate>0? 10000:-10000) : lastCp;
+        if(stm === 'b') cp = -cp;
+        resolve({cp, bestMove, source:'local'});
+      }
+    };
+    sfWorker.addEventListener('message', onMsg);
+    sfWorker.postMessage('position fen ' + fen);
+    sfWorker.postMessage('go movetime ' + movetimeMs);
+  });
+}
+
+async function fetchCloudEval(fen){
+  try{
+    const res = await fetch(`https://lichess.org/api/cloud-eval?fen=${encodeURIComponent(fen)}`);
+    if(!res.ok) return null; // 404 = position not in Lichess's cache
+    const data = await res.json();
+    if(!data.pvs || !data.pvs.length) return null;
+    const top = data.pvs[0];
+    let cp = (typeof top.cp === 'number') ? top.cp : null;
+    if(cp === null && typeof top.mate === 'number') cp = top.mate > 0 ? 10000 : -10000;
+    if(cp === null) return null;
+    // Lichess cloud-eval cp is already given from White's perspective (unlike raw UCI output)
+    const bestMove = top.moves ? top.moves.split(' ')[0] : null;
+    return {cp, bestMove, source:'cloud'};
+  }catch(e){
+    return null; // network hiccup — just fall through to local engine
+  }
+}
+
+async function evaluatePosition(fen, movetimeMs=400){
+  const cloud = await fetchCloudEval(fen);
+  if(cloud){
+    document.getElementById('engineStatus').textContent = 'engine: cloud eval';
+    return cloud;
+  }
+  document.getElementById('engineStatus').textContent = 'engine: local (uncached position)';
+  return await evaluateFenLocal(fen, movetimeMs);
+}
+
+/* ---------------- FULL GAME ANALYSIS ---------------- */
+document.getElementById('runFullAnalysis').addEventListener('click', runFullAnalysis);
+async function runFullAnalysis(){
+  const btn = document.getElementById('runFullAnalysis');
+  btn.disabled = true; btn.textContent = 'Analysing…';
+  let prevCp = 0;
+  const movetime = parseInt(document.getElementById('analysisSpeed').value, 10);
+  for(let ply=0; ply<state.positions.length; ply++){
+    btn.textContent = `Analysing… (${ply}/${state.positions.length-1})`;
+    const {cp} = await evaluatePosition(state.positions[ply], movetime);
+    if(ply>0){
+      const moverIsWhite = (ply % 2 === 1); // ply1 = white's first move
+      const loss = moverIsWhite ? (prevCp - cp) : (cp - prevCp);
+      let classification = null, tag = '';
+      if(loss >= 300){ classification='blunder'; tag='blunder'; }
+      else if(loss >= 120){ classification='mistake'; tag='mistake'; }
+      else if(loss >= 50){ classification='inaccuracy'; tag='inaccuracy'; }
+      state.moveEvals[ply] = {cp, classification, tag};
+    } else {
+      state.moveEvals[0] = {cp};
+    }
+    prevCp = cp;
+  }
+  btn.disabled = false; btn.textContent = 'Analyse full game';
+  renderMovePanel();
+  renderBoard();
+}
+
+/* ---------------- REPERTOIRE ---------------- */
+document.getElementById('repWhitePill').addEventListener('click', ()=>setRepColor('white'));
+document.getElementById('repBlackPill').addEventListener('click', ()=>setRepColor('black'));
+function setRepColor(c){
+  state.repColor = c;
+  document.getElementById('repWhitePill').classList.toggle('active', c==='white');
+  document.getElementById('repBlackPill').classList.toggle('active', c==='black');
+  renderRepTree();
+}
+function saveRepertoire(){
+  localStorage.setItem('ledger_repertoire', JSON.stringify(state.repertoire));
+}
+function mergeLineIntoTree(tree, sanMoves){
+  let node = tree;
+  for(const san of sanMoves){
+    if(!node[san]) node[san] = {};
+    node = node[san];
+  }
+}
+document.getElementById('importPgnBtn').addEventListener('click', ()=>{
+  const text = document.getElementById('pgnImport').value;
+  const sanMoves = parseMovesString(text);
+  const {sanClean} = buildPositions(sanMoves);
+  if(sanClean.length === 0){ alert('Could not parse any moves from that PGN.'); return; }
+  mergeLineIntoTree(state.repertoire[state.repColor], sanClean);
+  saveRepertoire();
+  renderRepTree();
+  document.getElementById('pgnImport').value = '';
+});
+document.getElementById('clearRepBtn').addEventListener('click', ()=>{
+  if(!confirm(`Clear your entire ${state.repColor} repertoire?`)) return;
+  state.repertoire[state.repColor] = {};
+  saveRepertoire();
+  renderRepTree();
+});
+function renderRepTree(){
+  const container = document.getElementById('repTree');
+  const tree = state.repertoire[state.repColor];
+  container.innerHTML = Object.keys(tree).length
+    ? buildTreeHtml(tree)
+    : '<div class="empty">No lines yet. Import a PGN, or add deviations from the Analysis tab.</div>';
+}
+function buildTreeHtml(node){
+  const keys = Object.keys(node);
+  if(keys.length === 0) return '';
+  let html = '<ul>';
+  for(const k of keys){
+    html += `<li><span class="mv">${k}</span>${buildTreeHtml(node[k])}</li>`;
+  }
+  html += '</ul>';
+  return html;
+}
+
+/* ---------------- DEVIATION DETECTION ---------------- */
+function checkDeviation(){
+  const banner = document.getElementById('deviationBanner');
+  if(!state.currentGame || state.sanMoves.length === 0){ banner.classList.add('hidden'); return; }
+  const tree = state.repertoire[state.userColor];
+  let node = tree;
+  let deviationPly = null;
+  let deviationMove = null;
+  for(let i=0;i<state.sanMoves.length;i++){
+    const ply = i+1;
+    const isUserMove = (state.userColor === 'white') ? (i%2===0) : (i%2===1);
+    const san = state.sanMoves[i];
+    if(isUserMove){
+      if(node && node[san] !== undefined){
+        node = node[san];
+      } else if(node && Object.keys(node).length > 0){
+        // repertoire has lines here but not this move -> deviation
+        deviationPly = ply; deviationMove = san; break;
+      } else {
+        // no repertoire data at all at this point -> nothing to compare, stop silently
+        break;
+      }
+    } else {
+      // opponent move: follow if tree has it, else just stop tracking (opponent left our prep)
+      if(node && node[san] !== undefined) node = node[san];
+      else break;
+    }
+  }
+  if(deviationPly){
+    banner.classList.remove('hidden');
+    document.getElementById('deviationText').textContent =
+      `At move ${Math.ceil(deviationPly/2)}, you played ${deviationMove}, which isn't in your ${state.userColor} repertoire yet.`;
+    document.getElementById('addToRepertoireBtn').onclick = ()=>{
+      mergeLineIntoTree(state.repertoire[state.userColor], state.sanMoves.slice(0, deviationPly));
+      saveRepertoire();
+      banner.classList.add('hidden');
+      alert('Added to your repertoire.');
+    };
+  } else {
+    banner.classList.add('hidden');
+  }
+}
+</script>
+</body>
+</html>
