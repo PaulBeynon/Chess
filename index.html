@@ -152,6 +152,33 @@
   .chart-bar-col{ display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; flex:0 0 auto; }
   .chart-bar{ width:24px; border-radius:3px 3px 0 0; }
   .chart-bar-label{ font-size:10px; color:var(--text-dim); margin-top:5px; font-family:'IBM Plex Mono', monospace; white-space:nowrap; }
+
+  .timeline-row{ display:flex; flex-wrap:wrap; gap:3px; }
+  .timeline-sq{
+    width:24px; height:24px; border-radius:4px; display:flex; align-items:center; justify-content:center;
+    font-size:10px; font-family:'IBM Plex Mono', monospace; font-weight:700; color:#0f1c17; flex-shrink:0;
+  }
+
+  .segbar{ display:flex; height:26px; border-radius:5px; overflow:hidden; border:1px solid var(--line); }
+  .segbar-seg{ display:flex; align-items:center; justify-content:center; font-size:10px; font-family:'IBM Plex Mono', monospace; color:#0f1c17; font-weight:600; }
+  .seg-legend{ display:flex; gap:16px; margin-top:8px; flex-wrap:wrap; }
+  .seg-legend span{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-dim); font-family:'IBM Plex Mono', monospace; }
+  .seg-legend .dot{ width:9px; height:9px; border-radius:2px; display:inline-block; }
+
+  .heatmap-board{ width:100%; max-width:320px; aspect-ratio:1/1; display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr);
+    border-radius:4px; overflow:hidden; border:1px solid var(--line); margin:0 auto; }
+  .heatmap-sq{ position:relative; background:var(--panel-2); display:flex; align-items:center; justify-content:center; }
+  .heatmap-sq .count{ font-size:10px; font-family:'IBM Plex Mono', monospace; color:var(--text); opacity:0.85; position:relative; z-index:1; }
+  .heatmap-fill{ position:absolute; inset:0; background:var(--bad); }
+
+  .blunder-item{
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px; padding:10px 14px; margin-bottom:6px; cursor:pointer;
+  }
+  .blunder-item:hover{ border-color:var(--brass-dim); }
+  .blunder-item .move-info{ font-family:'IBM Plex Mono', monospace; font-size:13px; }
+  .blunder-item .move-meta{ font-size:11px; color:var(--text-dim); margin-top:2px; }
+  .blunder-item .loss-badge{ font-family:'IBM Plex Mono', monospace; font-size:12px; color:var(--bad); font-weight:600; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -257,9 +284,33 @@
         <select id="breakdownSpeedFilter"><option value="all">All analysed games</option></select>
       </div>
       <div class="row" id="breakdownCards" style="margin-bottom:22px;"></div>
+
+      <h3 style="margin-bottom:6px; font-size:16px;">Session timeline</h3>
+      <p class="small" id="timelineCaption" style="margin-bottom:10px;"></p>
+      <div id="sessionTimeline" style="margin-bottom:28px;"></div>
+
+      <h3 style="margin-bottom:10px; font-size:16px;">Rating trend</h3>
+      <div id="ratingChart" style="margin-bottom:28px;"></div>
+
       <h3 style="margin-bottom:10px; font-size:16px;">Accuracy by game</h3>
       <p class="small" style="margin-bottom:14px;">Each bar is one analysed game, oldest to most recent, left to right. Taller = more accurate. Green ≥88%, amber ≥72%, red below that.</p>
-      <div id="accuracyChart" style="margin-bottom:30px;"></div>
+      <div id="accuracyChart" style="margin-bottom:28px;"></div>
+
+      <h3 style="margin-bottom:10px; font-size:16px;">Clean rate</h3>
+      <p class="small" style="margin-bottom:10px;">Spotless = no errors at all. Clean = no blunders (inaccuracies/mistakes okay). Flawed = at least one blunder.</p>
+      <div id="cleanRate" style="margin-bottom:28px;"></div>
+
+      <h3 style="margin-bottom:10px; font-size:16px;">When you blunder</h3>
+      <p class="small" style="margin-bottom:10px;">Opening = moves 1–12, midgame = 13–30, endgame = 31+.</p>
+      <div id="phaseBreakdown" style="margin-bottom:28px;"></div>
+
+      <h3 style="margin-bottom:6px; font-size:16px;">Blindspot heatmap</h3>
+      <p class="small" style="margin-bottom:14px;">Squares where your blunders have landed most often, across all analysed games.</p>
+      <div id="blunderHeatmap" style="margin-bottom:28px;"></div>
+
+      <h3 style="margin-bottom:10px; font-size:16px;">Worst blunders</h3>
+      <p class="small" style="margin-bottom:14px;">Your biggest evaluation swings, worst first. Tap one to jump straight to that position.</p>
+      <div id="worstBlunders" style="margin-bottom:28px;"></div>
 
       <h3 style="margin-bottom:6px; font-size:16px;">Weaknesses vs. a typical player at your rating</h3>
       <p class="small" id="radarCaption" style="margin-bottom:14px;"></p>
@@ -432,13 +483,14 @@ async function computeGameAnalysis(g, movetimeMs, onProgress){
   const sanMoves = parseMovesString(g.pgn || '');
   const {positions} = buildPositions(sanMoves);
   const plyEvals = [];
-  let prevCp = 0, blunders = 0, mistakes = 0, inaccuracies = 0, userLossSum = 0, userMoveCount = 0;
+  const blunderDetails = [];
+  let prevCp = 0, prevBestMoveUci = null, blunders = 0, mistakes = 0, inaccuracies = 0, userLossSum = 0, userMoveCount = 0;
   let firstErrorPly = null;
   for(let ply=0; ply<positions.length; ply++){
     if(onProgress) onProgress(ply, positions.length);
-    const {cp} = await evaluatePosition(positions[ply], movetimeMs);
+    const {cp, bestMove} = await evaluatePosition(positions[ply], movetimeMs);
     plyEvals.push(cp === undefined ? null : cp);
-    if(cp === null || cp === undefined) continue; // leave prevCp as-is, skip this position
+    if(cp === null || cp === undefined){ prevBestMoveUci = null; continue; } // leave prevCp as-is, skip this position
     if(ply>0){
       const moverIsWhite = (ply % 2 === 1);
       const moverIsUser = (moverIsWhite === isUserWhite);
@@ -447,13 +499,30 @@ async function computeGameAnalysis(g, movetimeMs, onProgress){
         const clampedLoss = Math.max(0, Math.min(loss, 1000)); // avoid mate-score swings dominating the average
         userLossSum += clampedLoss;
         userMoveCount++;
-        if(loss >= 300) blunders++;
+        if(loss >= 300){
+          blunders++;
+          const moveNumber = Math.ceil(ply/2);
+          const actualSan = sanMoves[ply-1];
+          const squares = sanMoveSquares(positions[ply-1], actualSan);
+          const bestInfo = prevBestMoveUci ? uciToSan(positions[ply-1], prevBestMoveUci) : null;
+          blunderDetails.push({
+            gameId: g.id,
+            opponent: (isUserWhite ? g.players?.black?.user?.name : g.players?.white?.user?.name) || 'anon',
+            gameResult: !g.winner ? 'draw' : ((g.winner === 'white') === isUserWhite ? 'win' : 'loss'),
+            ply, moveNumber,
+            phase: moveNumber <= 12 ? 'opening' : moveNumber <= 30 ? 'midgame' : 'endgame',
+            actualSan, bestSan: bestInfo?.san || null,
+            toSquare: squares?.to || null,
+            cpLoss: Math.round(loss), cpBefore: prevCp, cpAfter: cp,
+          });
+        }
         else if(loss >= 120) mistakes++;
         else if(loss >= 50) inaccuracies++;
         if(firstErrorPly === null && loss >= 50) firstErrorPly = ply;
       }
     }
     prevCp = cp;
+    prevBestMoveUci = bestMove;
   }
   const acpl = userMoveCount > 0 ? Math.round(userLossSum / userMoveCount) : null;
   const result = !g.winner ? 'draw' : ((g.winner === 'white') === isUserWhite ? 'win' : 'loss');
@@ -463,8 +532,29 @@ async function computeGameAnalysis(g, movetimeMs, onProgress){
   const rating = (isUserWhite ? g.players?.white?.rating : g.players?.black?.rating) ?? null;
   return {
     blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true,
-    firstErrorMove, rating, speed: g.speed || null, plyEvals
+    firstErrorMove, rating, speed: g.speed || null, plyEvals, blunderDetails
   };
+}
+
+// Converts a UCI move (e.g. "e7e5") into SAN using the position it was suggested from — used to
+// show the engine's recommended move in place of a blunder in a human-readable form.
+function uciToSan(fenBefore, uciMove){
+  if(!uciMove || uciMove.length < 4) return null;
+  try{
+    const chess = new Chess(fenBefore);
+    const from = uciMove.slice(0,2), to = uciMove.slice(2,4);
+    const promotion = uciMove.length > 4 ? uciMove[4] : undefined;
+    const mv = chess.move({from, to, promotion});
+    return mv ? {san: mv.san, to: mv.to} : null;
+  }catch(e){ return null; }
+}
+// Replays a known SAN move from a known position to recover its from/to squares (for the heatmap).
+function sanMoveSquares(fenBefore, san){
+  try{
+    const chess = new Chess(fenBefore);
+    const mv = chess.move(san, {sloppy:true});
+    return mv ? {from: mv.from, to: mv.to} : null;
+  }catch(e){ return null; }
 }
 
 // Turns a raw array of per-ply centipawn evals into the {ply: {cp, classification}} map the
@@ -915,6 +1005,147 @@ function renderRadarChart(axes, size=340){
   </svg>`;
 }
 
+// ---- Session timeline: one square per game, in order, plus best win streak ----
+function renderSessionTimeline(analysed){
+  let best = 0, current = 0;
+  const squares = analysed.map(a=>{
+    if(a.result === 'win'){ current++; best = Math.max(best, current); }
+    else { current = 0; }
+    const color = a.result==='win' ? 'var(--good)' : a.result==='loss' ? 'var(--bad)' : 'var(--mid)';
+    const letter = a.result==='win' ? 'W' : a.result==='loss' ? 'L' : 'D';
+    const dateLabel = a.createdAt ? new Date(a.createdAt).toLocaleDateString() : '';
+    return `<span class="timeline-sq" style="background:${color};" title="${letter} · ${dateLabel}">${letter}</span>`;
+  }).join('');
+  document.getElementById('sessionTimeline').innerHTML = `<div class="timeline-row">${squares}</div>`;
+  document.getElementById('timelineCaption').textContent = `Best streak: ${best} win${best===1?'':'s'} in a row.`;
+}
+
+// ---- Rating trend: simple SVG line chart over the analysed games in order ----
+function renderRatingChart(analysed){
+  const el = document.getElementById('ratingChart');
+  const points = analysed.map((a,i)=>({v:a.rating, i})).filter(d=>d.v !== null && d.v !== undefined);
+  if(points.length < 2){
+    el.innerHTML = '<div class="empty">Not enough rated games in this set yet.</div>';
+    return;
+  }
+  const height = 170, width = Math.max(320, points.length*30);
+  const min = Math.min(...points.map(d=>d.v)), max = Math.max(...points.map(d=>d.v));
+  const range = Math.max(1, max-min);
+  const coords = points.map((d,idx)=>{
+    const x = points.length===1 ? width/2 : (idx/(points.length-1)) * (width-24) + 12;
+    const y = height - ((d.v-min)/range) * (height-36) - 18;
+    return [x,y];
+  });
+  const path = coords.map((p,i)=>(i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const dots = coords.map(p=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3.5" fill="var(--brass)"/>`).join('');
+  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" style="width:100%; height:${height}px; display:block;">
+    <path d="${path}" fill="none" stroke="var(--brass)" stroke-width="2"/>
+    ${dots}
+    <text x="4" y="14" font-size="11" fill="#a9b6ac" font-family="IBM Plex Mono, monospace">${Math.round(max)}</text>
+    <text x="4" y="${height-6}" font-size="11" fill="#a9b6ac" font-family="IBM Plex Mono, monospace">${Math.round(min)}</text>
+  </svg>`;
+}
+
+// ---- Clean rate: spotless / clean / flawed segmented bar ----
+function renderCleanRate(analysed){
+  const total = analysed.length;
+  const spotless = analysed.filter(a=>a.blunders===0 && a.mistakes===0 && a.inaccuracies===0).length;
+  const clean = analysed.filter(a=>a.blunders===0 && (a.mistakes>0 || a.inaccuracies>0)).length;
+  const flawed = total - spotless - clean;
+  const segs = [
+    {label:'Spotless', count:spotless, color:'var(--good)'},
+    {label:'Clean', count:clean, color:'var(--mid)'},
+    {label:'Flawed', count:flawed, color:'var(--bad)'},
+  ];
+  const bar = segs.filter(s=>s.count>0).map(s=>{
+    const pct = (s.count/total*100).toFixed(1);
+    return `<div class="segbar-seg" style="width:${pct}%; background:${s.color};">${pct>=8 ? Math.round(pct)+'%' : ''}</div>`;
+  }).join('');
+  const legend = segs.map(s=>`<span><span class="dot" style="background:${s.color};"></span>${s.label}: ${s.count}</span>`).join('');
+  document.getElementById('cleanRate').innerHTML = `<div class="segbar">${bar}</div><div class="seg-legend">${legend}</div>`;
+}
+
+// ---- Blunder phase breakdown: opening / midgame / endgame segmented bar ----
+function renderPhaseBreakdown(analysed){
+  const allBlunders = analysed.flatMap(a=>a.blunderDetails || []);
+  const el = document.getElementById('phaseBreakdown');
+  if(allBlunders.length === 0){
+    el.innerHTML = '<div class="empty">No blunders in this set — nothing to break down.</div>';
+    return;
+  }
+  const phases = ['opening','midgame','endgame'];
+  const colors = {opening:'var(--brass)', midgame:'var(--mid)', endgame:'var(--bad)'};
+  const counts = phases.map(p=>allBlunders.filter(b=>b.phase===p).length);
+  const total = allBlunders.length;
+  const bar = phases.map((p,i)=>{
+    const pct = (counts[i]/total*100).toFixed(1);
+    if(counts[i]===0) return '';
+    return `<div class="segbar-seg" style="width:${pct}%; background:${colors[p]};">${pct>=10 ? Math.round(pct)+'%' : ''}</div>`;
+  }).join('');
+  const legend = phases.map((p,i)=>`<span><span class="dot" style="background:${colors[p]};"></span>${p[0].toUpperCase()+p.slice(1)}: ${counts[i]}</span>`).join('');
+  el.innerHTML = `<div class="segbar">${bar}</div><div class="seg-legend">${legend}</div>`;
+}
+
+// ---- Blindspot heatmap: which squares your blunders tend to land on ----
+function renderBlunderHeatmap(analysed){
+  const allBlunders = analysed.flatMap(a=>a.blunderDetails || []);
+  const el = document.getElementById('blunderHeatmap');
+  if(allBlunders.length === 0){
+    el.innerHTML = '<div class="empty">No blunders in this set yet.</div>';
+    return;
+  }
+  const counts = {};
+  allBlunders.forEach(b=>{ if(b.toSquare) counts[b.toSquare] = (counts[b.toSquare]||0)+1; });
+  const maxCount = Math.max(1, ...Object.values(counts));
+  const files = 'abcdefgh';
+  let html = '';
+  for(let r=8; r>=1; r--){
+    for(let f=0; f<8; f++){
+      const sq = files[f]+r;
+      const c = counts[sq] || 0;
+      const opacity = c===0 ? 0 : 0.25 + (c/maxCount)*0.65;
+      html += `<div class="heatmap-sq"><div class="heatmap-fill" style="opacity:${opacity};"></div><span class="count">${c>0?c:''}</span></div>`;
+    }
+  }
+  el.innerHTML = `<div class="heatmap-board">${html}</div>`;
+}
+
+// ---- Worst blunders: biggest eval swings, with a jump-to-position link ----
+function renderWorstBlunders(analysed){
+  const allBlunders = analysed.flatMap(a=>a.blunderDetails || []);
+  const el = document.getElementById('worstBlunders');
+  if(allBlunders.length === 0){
+    el.innerHTML = '<div class="empty">No blunders in this set — nice.</div>';
+    return;
+  }
+  const worst = [...allBlunders].sort((a,b)=>b.cpLoss - a.cpLoss).slice(0, 8);
+  el.innerHTML = worst.map(b=>{
+    const moveLabel = `${b.moveNumber}. ${b.actualSan}`;
+    const bestLabel = b.bestSan ? ` (best: ${b.bestSan})` : '';
+    return `<div class="blunder-item" data-game-id="${b.gameId}" data-ply="${b.ply}">
+      <div>
+        <div class="move-info">${moveLabel}${bestLabel}</div>
+        <div class="move-meta">vs ${b.opponent} · ${b.phase} · ${b.gameResult}</div>
+      </div>
+      <span class="loss-badge">−${(b.cpLoss/100).toFixed(1)}</span>
+    </div>`;
+  }).join('');
+}
+document.getElementById('worstBlunders').addEventListener('click', (e)=>{
+  const item = e.target.closest('.blunder-item');
+  if(!item) return;
+  jumpToBlunder(item.dataset.gameId, parseInt(item.dataset.ply, 10));
+});
+function jumpToBlunder(gameId, ply){
+  const g = state.games.find(x=>x.id === gameId);
+  if(!g){ alert("Couldn't find that game's data — try re-fetching games from the Games tab."); return; }
+  loadGameIntoAnalysis(g, isGameUserWhite(g));
+  state.ply = ply;
+  renderBoard();
+  renderMovePanel();
+  checkDeviation();
+}
+
 function renderBreakdown(){
   const all = Object.values(state.autoAnalysis).filter(a => a.done)
     .sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt));
@@ -941,6 +1172,13 @@ function renderBreakdown(){
   if(analysed.length === 0){
     document.getElementById('breakdownCards').innerHTML = '<div class="empty">No analysed games for this time control yet.</div>';
     document.getElementById('accuracyChart').innerHTML = '';
+    document.getElementById('sessionTimeline').innerHTML = '';
+    document.getElementById('timelineCaption').textContent = '';
+    document.getElementById('ratingChart').innerHTML = '';
+    document.getElementById('cleanRate').innerHTML = '';
+    document.getElementById('phaseBreakdown').innerHTML = '';
+    document.getElementById('blunderHeatmap').innerHTML = '';
+    document.getElementById('worstBlunders').innerHTML = '';
     document.getElementById('radarChart').innerHTML = '';
     document.getElementById('radarCaption').textContent = '';
     return;
@@ -982,6 +1220,13 @@ function renderBreakdown(){
     </div>`;
   }).join('');
   chartEl.innerHTML = `<div class="chart-bar-wrap">${bars}</div>`;
+
+  renderSessionTimeline(analysed);
+  renderRatingChart(analysed);
+  renderCleanRate(analysed);
+  renderPhaseBreakdown(analysed);
+  renderBlunderHeatmap(analysed);
+  renderWorstBlunders(analysed);
 
   // ---- Radar: your profile vs. a typical player at your rating for this time control ----
   const ratedGames = analysed.filter(a=>a.rating !== null);
