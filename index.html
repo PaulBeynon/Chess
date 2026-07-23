@@ -483,15 +483,21 @@ async function computeGameAnalysis(g, movetimeMs, onProgress){
   const sanMoves = parseMovesString(g.pgn || '');
   const {positions} = buildPositions(sanMoves);
   const plyEvals = [];
+  const plySources = [];
   const blunderDetails = [];
-  let prevCp = 0, prevBestMoveUci = null, blunders = 0, mistakes = 0, inaccuracies = 0, userLossSum = 0, userMoveCount = 0;
+  let prevCp = 0, prevSource = null, prevBestMoveUci = null, blunders = 0, mistakes = 0, inaccuracies = 0, userLossSum = 0, userMoveCount = 0;
   let firstErrorPly = null;
   for(let ply=0; ply<positions.length; ply++){
     if(onProgress) onProgress(ply, positions.length);
-    const {cp, bestMove} = await evaluatePosition(positions[ply], movetimeMs);
+    const {cp, bestMove, source} = await evaluatePosition(positions[ply], movetimeMs);
     plyEvals.push(cp === undefined ? null : cp);
-    if(cp === null || cp === undefined){ prevBestMoveUci = null; continue; } // leave prevCp as-is, skip this position
-    if(ply>0){
+    plySources.push(source ?? null);
+    if(cp === null || cp === undefined){ prevBestMoveUci = null; prevSource = null; continue; } // leave prevCp as-is, skip this position
+    // Comparing a deep cloud eval to a shallow local-engine eval (or vice versa) produces a
+    // fake swing purely from the difference in engine strength, not a real mistake. Only
+    // classify a move when both the before and after positions came from the same source.
+    const sameSourceAsBefore = prevSource !== null && prevSource === source;
+    if(ply>0 && sameSourceAsBefore){
       const moverIsWhite = (ply % 2 === 1);
       const moverIsUser = (moverIsWhite === isUserWhite);
       if(moverIsUser){
@@ -522,9 +528,10 @@ async function computeGameAnalysis(g, movetimeMs, onProgress){
       }
     }
     prevCp = cp;
+    prevSource = source ?? null;
     prevBestMoveUci = bestMove;
   }
-  const acpl = userMoveCount > 0 ? Math.round(userLossSum / userMoveCount) : null;
+  const acpl = (userMoveCount > 0 && Number.isFinite(userLossSum)) ? Math.round(userLossSum / userMoveCount) : null;
   const result = !g.winner ? 'draw' : ((g.winner === 'white') === isUserWhite ? 'win' : 'loss');
   // "Opening Prep" proxy: how many of your own moves you got through before the first slip.
   // If you never slipped, credit you with having held for every move you made.
@@ -532,7 +539,7 @@ async function computeGameAnalysis(g, movetimeMs, onProgress){
   const rating = (isUserWhite ? g.players?.white?.rating : g.players?.black?.rating) ?? null;
   return {
     blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true,
-    firstErrorMove, rating, speed: g.speed || null, plyEvals, blunderDetails
+    firstErrorMove, rating, speed: g.speed || null, plyEvals, plySources, blunderDetails
   };
 }
 
@@ -559,13 +566,15 @@ function sanMoveSquares(fenBefore, san){
 
 // Turns a raw array of per-ply centipawn evals into the {ply: {cp, classification}} map the
 // board/move-list/eval-bar all read from.
-function classifyPlyEvals(plyEvals){
+function classifyPlyEvals(plyEvals, plySources){
   const moveEvals = {};
-  let prevCp = 0;
+  let prevCp = 0, prevSource = null;
   for(let ply=0; ply<plyEvals.length; ply++){
     const cp = plyEvals[ply];
-    if(cp === null || cp === undefined){ moveEvals[ply] = {cp:null, tag:'—'}; continue; }
-    if(ply>0){
+    const source = plySources ? (plySources[ply] ?? null) : null;
+    if(cp === null || cp === undefined){ moveEvals[ply] = {cp:null, tag:'—'}; prevSource = null; continue; }
+    const sameSourceAsBefore = prevSource !== null && prevSource === source;
+    if(ply>0 && sameSourceAsBefore){
       const moverIsWhite = (ply % 2 === 1);
       const loss = moverIsWhite ? (prevCp - cp) : (cp - prevCp);
       let classification = null, tag = '';
@@ -574,9 +583,10 @@ function classifyPlyEvals(plyEvals){
       else if(loss >= 50){ classification='inaccuracy'; tag='inaccuracy'; }
       moveEvals[ply] = {cp, classification, tag};
     } else {
-      moveEvals[0] = {cp};
+      moveEvals[ply] = {cp};
     }
     prevCp = cp;
+    prevSource = source;
   }
   return moveEvals;
 }
@@ -622,7 +632,7 @@ function loadGameIntoAnalysis(g, isUserWhite){
   // Reuse cached analysis (from background auto-analysis, or a previous manual run) instead of
   // making the person re-run "Analyse full game" for a game that's already been analysed.
   const cached = state.autoAnalysis[g.id];
-  state.moveEvals = cached?.plyEvals ? classifyPlyEvals(cached.plyEvals) : {};
+  state.moveEvals = cached?.plyEvals ? classifyPlyEvals(cached.plyEvals, cached.plySources) : {};
 
   document.getElementById('analysisEmpty').classList.add('hidden');
   document.getElementById('analysisBody').classList.remove('hidden');
@@ -939,7 +949,7 @@ async function runFullAnalysis(){
     btn.textContent = `Analysing… (${ply}/${total-1})`;
   });
   state.autoAnalysis[state.currentGame.id] = result;
-  state.moveEvals = classifyPlyEvals(result.plyEvals);
+  state.moveEvals = classifyPlyEvals(result.plyEvals, result.plySources);
   btn.disabled = false;
   renderMovePanel();
   renderBoard();
@@ -979,7 +989,8 @@ function renderRadarChart(axes, size=340){
   const n=axes.length;
   const angleFor = i => (Math.PI*2*i/n) - Math.PI/2;
   const pt = (value, i) => {
-    const r = R*(Math.max(0,Math.min(100,value))/100);
+    const safeValue = Number.isFinite(value) ? value : 0;
+    const r = R*(Math.max(0,Math.min(100,safeValue))/100);
     const a = angleFor(i);
     return [cx + r*Math.cos(a), cy + r*Math.sin(a)];
   };
@@ -1190,7 +1201,7 @@ function renderBreakdown(){
   const totalBlunders = analysed.reduce((s,a)=>s+a.blunders,0);
   const totalMistakes = analysed.reduce((s,a)=>s+a.mistakes,0);
   const totalInaccuracies = analysed.reduce((s,a)=>s+a.inaccuracies,0);
-  const acplGames = analysed.filter(a=>a.acpl !== null);
+  const acplGames = analysed.filter(a=>Number.isFinite(a.acpl));
   const avgAcpl = acplGames.length ? Math.round(acplGames.reduce((s,a)=>s+a.acpl,0)/acplGames.length) : null;
   const avgAccuracy = acplToAccuracy(avgAcpl);
 
@@ -1246,10 +1257,10 @@ function renderBreakdown(){
   const avgFirstErrorMove = openingGames.length ? openingGames.reduce((s,a)=>s+a.firstErrorMove,0)/openingGames.length : null;
 
   const axes = [
-    { label:'Accuracy', value: avgAccuracy ?? 0, benchmark: avgRating !== null ? interpolateTable(BENCH_ACCURACY, avgRating) : null },
+    { label:'Accuracy', value: Number.isFinite(avgAccuracy) ? avgAccuracy : 0, benchmark: avgRating !== null ? interpolateTable(BENCH_ACCURACY, avgRating) : null },
     { label:'Blunder Control', value: rateToScore(blunderRate), benchmark: avgRating !== null ? rateToScore(interpolateTable(BENCH_BLUNDERS, avgRating)) : null },
     { label:'Mistake Control', value: rateToScore(mistakeRate), benchmark: avgRating !== null ? rateToScore(interpolateTable(BENCH_MISTAKES, avgRating)) : null },
-    { label:'Consistency', value: consistencyScore ?? 0, benchmark: avgRating !== null ? interpolateTable(BENCH_CONSISTENCY, avgRating) : null },
+    { label:'Consistency', value: Number.isFinite(consistencyScore) ? consistencyScore : 0, benchmark: avgRating !== null ? interpolateTable(BENCH_CONSISTENCY, avgRating) : null },
     { label:'Opening Prep', value: avgFirstErrorMove !== null ? movesToScore(avgFirstErrorMove) : 0, benchmark: avgRating !== null ? movesToScore(interpolateTable(BENCH_OPENING_MOVES, avgRating)) : null },
   ];
   document.getElementById('radarChart').innerHTML = renderRadarChart(axes);
