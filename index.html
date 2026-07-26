@@ -285,6 +285,13 @@
       </div>
       <div class="row" id="breakdownCards" style="margin-bottom:22px;"></div>
 
+      <h3 style="margin-bottom:10px; font-size:16px;">White vs. Black</h3>
+      <div id="colorSplit" style="margin-bottom:28px;"></div>
+
+      <h3 style="margin-bottom:6px; font-size:16px;">Openings you struggle with</h3>
+      <p class="small" id="openingWeaknessCaption" style="margin-bottom:14px;"></p>
+      <div id="openingWeaknesses" style="margin-bottom:28px;"></div>
+
       <h3 style="margin-bottom:6px; font-size:16px;">Session timeline</h3>
       <p class="small" id="timelineCaption" style="margin-bottom:10px;"></p>
       <div id="sessionTimeline" style="margin-bottom:28px;"></div>
@@ -538,7 +545,7 @@ async function computeGameAnalysis(g, movetimeMs, onProgress){
   const firstErrorMove = firstErrorPly !== null ? Math.ceil(firstErrorPly/2) : (userMoveCount || null);
   const rating = (isUserWhite ? g.players?.white?.rating : g.players?.black?.rating) ?? null;
   return {
-    blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true,
+    gameId: g.id, blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true,
     firstErrorMove, rating, speed: g.speed || null, plyEvals, plySources, blunderDetails
   };
 }
@@ -1076,6 +1083,91 @@ function renderCleanRate(analysed){
   document.getElementById('cleanRate').innerHTML = `<div class="segbar">${bar}</div><div class="seg-legend">${legend}</div>`;
 }
 
+// ---- White vs. Black: score split by colour played ----
+function renderColorSplit(analysed){
+  const el = document.getElementById('colorSplit');
+  const byColor = {
+    white: analysed.filter(a=>a.isUserWhite),
+    black: analysed.filter(a=>!a.isUserWhite),
+  };
+  const cards = ['white','black'].map(color=>{
+    const set = byColor[color];
+    if(set.length === 0){
+      return `<div class="stat-card"><div class="value">—</div><div class="label">${color[0].toUpperCase()+color.slice(1)} · no games yet</div></div>`;
+    }
+    const wins = set.filter(a=>a.result==='win').length;
+    const draws = set.filter(a=>a.result==='draw').length;
+    const losses = set.length - wins - draws;
+    const scorePct = (100 * (wins + draws/2) / set.length).toFixed(1);
+    const acplGames = set.filter(a=>Number.isFinite(a.acpl));
+    const avgAcc = acplGames.length ? acplToAccuracy(Math.round(acplGames.reduce((s,a)=>s+a.acpl,0)/acplGames.length)) : null;
+    return `<div class="stat-card">
+      <div class="value">${scorePct}%</div>
+      <div class="label">${color[0].toUpperCase()+color.slice(1)} score · ${wins}-${losses}-${draws} (${set.length} games)${avgAcc!==null ? ' · '+avgAcc.toFixed(1)+'% acc' : ''}</div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div class="row">${cards}</div>`;
+}
+
+// ---- Openings you struggle with: per-opening score, split by colour, flagged against your own average ----
+function renderOpeningWeaknesses(analysed){
+  const el = document.getElementById('openingWeaknesses');
+  const caption = document.getElementById('openingWeaknessCaption');
+  const MIN_GAMES = 3;
+  const MARGIN_BELOW_AVERAGE = 10; // percentage points below your own average with that colour
+
+  const rows = new Map(); // key: `${color}|${eco}` -> row
+  for(const a of analysed){
+    const g = state.games.find(x=>x.id === a.gameId);
+    const eco = g?.opening?.eco || '???';
+    const name = g?.opening?.name || 'Unknown opening';
+    const color = a.isUserWhite ? 'white' : 'black';
+    const key = `${color}|${eco}`;
+    if(!rows.has(key)) rows.set(key, {color, eco, name, games:0, wins:0, draws:0, losses:0});
+    const row = rows.get(key);
+    row.games++;
+    if(a.result==='win') row.wins++;
+    else if(a.result==='draw') row.draws++;
+    else row.losses++;
+  }
+  const allRows = [...rows.values()].map(r=>({...r, scorePct: 100*(r.wins+r.draws/2)/r.games}));
+
+  const baseline = {};
+  for(const color of ['white','black']){
+    const set = allRows.filter(r=>r.color===color);
+    const totalGames = set.reduce((s,r)=>s+r.games,0);
+    const totalScore = set.reduce((s,r)=>s+(r.wins+r.draws/2),0);
+    baseline[color] = totalGames ? 100*totalScore/totalGames : 0;
+  }
+
+  const weak = allRows
+    .filter(r=>r.games >= MIN_GAMES)
+    .map(r=>({...r, deltaVsBaseline: r.scorePct - baseline[r.color]}))
+    .filter(r=>r.deltaVsBaseline <= -MARGIN_BELOW_AVERAGE)
+    .sort((a,b)=>a.deltaVsBaseline - b.deltaVsBaseline)
+    .slice(0, 8);
+
+  caption.textContent = `Openings played at least ${MIN_GAMES} times where your score is ${MARGIN_BELOW_AVERAGE}+ points below your own average with that colour.`;
+
+  if(weak.length === 0){
+    el.innerHTML = `<div class="empty">No clear weak spots yet${analysed.length < 10 ? ' — analyse a few more games to get a reliable read' : ''}.</div>`;
+    return;
+  }
+  el.innerHTML = weak.map(r=>{
+    const colorBadgeStyle = r.color==='white' ? 'background:rgba(233,229,217,0.15); color:var(--text);' : 'background:rgba(0,0,0,0.25); color:var(--text-dim);';
+    return `<div class="blunder-item">
+      <div>
+        <div class="move-info">${r.name} <span class="small" style="opacity:0.65;">(${r.eco})</span></div>
+        <div class="move-meta">
+          <span class="badge" style="${colorBadgeStyle}">${r.color[0].toUpperCase()+r.color.slice(1)}</span>
+          ${r.wins}-${r.losses}-${r.draws} in ${r.games} games · ${r.scorePct.toFixed(1)}% score (your ${r.color} avg: ${baseline[r.color].toFixed(1)}%)
+        </div>
+      </div>
+      <span class="loss-badge">${r.deltaVsBaseline.toFixed(1)}pt</span>
+    </div>`;
+  }).join('');
+}
+
 // ---- Blunder phase breakdown: opening / midgame / endgame segmented bar ----
 function renderPhaseBreakdown(analysed){
   const allBlunders = analysed.flatMap(a=>a.blunderDetails || []);
@@ -1187,6 +1279,9 @@ function renderBreakdown(){
     document.getElementById('timelineCaption').textContent = '';
     document.getElementById('ratingChart').innerHTML = '';
     document.getElementById('cleanRate').innerHTML = '';
+    document.getElementById('colorSplit').innerHTML = '';
+    document.getElementById('openingWeaknesses').innerHTML = '';
+    document.getElementById('openingWeaknessCaption').textContent = '';
     document.getElementById('phaseBreakdown').innerHTML = '';
     document.getElementById('blunderHeatmap').innerHTML = '';
     document.getElementById('worstBlunders').innerHTML = '';
@@ -1235,6 +1330,8 @@ function renderBreakdown(){
   renderSessionTimeline(analysed);
   renderRatingChart(analysed);
   renderCleanRate(analysed);
+  renderColorSplit(analysed);
+  renderOpeningWeaknesses(analysed);
   renderPhaseBreakdown(analysed);
   renderBlunderHeatmap(analysed);
   renderWorstBlunders(analysed);
