@@ -235,7 +235,15 @@
 
   <!-- ANALYSIS TAB -->
   <section id="tab-analysis" class="panel hidden">
-    <div id="analysisEmpty" class="empty">Pick a game from the Games tab to begin analysis.</div>
+    <div class="row" style="margin-bottom:14px; align-items:center;">
+      <div style="flex:1; min-width:180px;">
+        <label for="analysisGamePicker">Jump to a loaded game</label>
+        <select id="analysisGamePicker" style="width:100%;">
+          <option value="">Fetch games to pick one…</option>
+        </select>
+      </div>
+    </div>
+    <div id="analysisEmpty" class="empty">No game selected yet — pick one above, or from the Games tab.</div>
     <div id="analysisBody" class="hidden">
       <div class="flex-between" style="margin-bottom:10px; flex-wrap:wrap; gap:8px;">
         <div class="small" id="gameTitle"></div>
@@ -276,11 +284,9 @@
   <!-- BREAKDOWN TAB -->
   <section id="tab-breakdown" class="panel hidden">
     <div id="lifetimeSection" class="hidden" style="margin-bottom:32px; padding-bottom:24px; border-bottom:1px solid var(--line);">
-      <h3 style="margin-bottom:6px; font-size:16px;">Career record</h3>
+      <h3 style="margin-bottom:6px; font-size:16px;">Last 25 games</h3>
       <p class="small" id="lifetimeCaption" style="margin-bottom:14px;"></p>
-      <div id="lifetimeCards" class="row" style="margin-bottom:22px;"></div>
-      <h3 style="margin-bottom:10px; font-size:16px;">Last 25 games vs. lifetime</h3>
-      <div id="recentVsLifetime"></div>
+      <div id="lifetimeCards" class="row"></div>
     </div>
     <div id="breakdownEmpty" class="empty">Auto-analyse some games from the Games tab first — this fills in once you have analysed games.</div>
     <div id="breakdownBody" class="hidden">
@@ -315,10 +321,6 @@
       <h3 style="margin-bottom:10px; font-size:16px;">When you blunder</h3>
       <p class="small" style="margin-bottom:10px;">Opening = moves 1–12, midgame = 13–30, endgame = 31+.</p>
       <div id="phaseBreakdown" style="margin-bottom:28px;"></div>
-
-      <h3 style="margin-bottom:10px; font-size:16px;">Worst blunders</h3>
-      <p class="small" style="margin-bottom:14px;">Your biggest evaluation swings, worst first. Tap one to jump straight to that position.</p>
-      <div id="worstBlunders" style="margin-bottom:28px;"></div>
 
       <h3 style="margin-bottom:6px; font-size:16px;">Weaknesses vs. a typical player at your rating</h3>
       <p class="small" id="radarCaption" style="margin-bottom:14px;"></p>
@@ -576,7 +578,33 @@ function renderGameList(){
     row.addEventListener('click', ()=> loadGameIntoAnalysis(g, isUserWhite));
     el.appendChild(row);
   });
+  populateAnalysisPicker();
 }
+
+function populateAnalysisPicker(){
+  const picker = document.getElementById('analysisGamePicker');
+  const currentId = state.currentGame?.id || '';
+  if(state.games.length === 0){
+    picker.innerHTML = '<option value="">Fetch games to pick one…</option>';
+    return;
+  }
+  picker.innerHTML = '<option value="">Choose a game…</option>' + state.games.map(g=>{
+    const white = g.players?.white?.user?.name || 'anon';
+    const black = g.players?.black?.user?.name || 'anon';
+    const isUserWhite = white.toLowerCase() === state.username.toLowerCase();
+    const userWon = g.winner && ((g.winner==='white') === isUserWhite);
+    const resultLetter = !g.winner ? 'D' : userWon ? 'W' : 'L';
+    const label = `${resultLetter} · vs ${isUserWhite ? black : white} · ${g.opening?.name || 'Unknown opening'} · ${new Date(g.createdAt).toLocaleDateString()}`;
+    return `<option value="${g.id}"${g.id===currentId ? ' selected' : ''}>${label}</option>`;
+  }).join('');
+}
+document.getElementById('analysisGamePicker').addEventListener('change', (e)=>{
+  const id = e.target.value;
+  if(!id) return;
+  const g = state.games.find(x=>x.id === id);
+  if(!g) return;
+  loadGameIntoAnalysis(g, isGameUserWhite(g));
+});
 
 async function runAutoAnalysis(){
   if(state.autoAnalysisRunning) return; // don't double-run if user re-imports mid-analysis
@@ -678,7 +706,7 @@ async function computeGameAnalysis(g, movetimeMs, onProgress){
   const firstErrorMove = firstErrorPly !== null ? Math.ceil(firstErrorPly/2) : (userMoveCount || null);
   const rating = (isUserWhite ? g.players?.white?.rating : g.players?.black?.rating) ?? null;
   return {
-    gameId: g.id, blunders, mistakes, inaccuracies, acpl, isUserWhite, result, createdAt: g.createdAt, done: true,
+    gameId: g.id, blunders, mistakes, inaccuracies, acpl, userMoveCount, isUserWhite, result, createdAt: g.createdAt, done: true,
     firstErrorMove, rating, speed: g.speed || null, plyEvals, plySources, blunderDetails
   };
 }
@@ -777,6 +805,8 @@ function loadGameIntoAnalysis(g, isUserWhite){
   document.getElementById('analysisEmpty').classList.add('hidden');
   document.getElementById('analysisBody').classList.remove('hidden');
   renderGameTitle(g);
+  const picker = document.getElementById('analysisGamePicker');
+  if(picker) picker.value = g.id;
 
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
   document.querySelector('.tab-btn[data-tab="analysis"]').classList.add('active');
@@ -1169,7 +1199,7 @@ function renderSessionTimeline(analysed){
     return `<span class="timeline-sq" style="background:${color};" title="${letter} · ${dateLabel}">${letter}</span>`;
   }).join('');
   document.getElementById('sessionTimeline').innerHTML = `<div class="timeline-row">${squares}</div>`;
-  document.getElementById('timelineCaption').textContent = `Best streak: ${best} win${best===1?'':'s'} in a row.`;
+  document.getElementById('timelineCaption').textContent = `Each square is one analysed game, oldest to newest (left to right). Best streak: ${best} win${best===1?'':'s'} in a row.`;
 }
 
 // ---- Rating trend: simple SVG line chart over the analysed games in order ----
@@ -1197,36 +1227,38 @@ function renderRatingChart(analysed){
   Object.values(bySpeed).forEach(list=> list.sort((a,b)=> new Date(a.createdAt) - new Date(b.createdAt)));
 
   const allTimes = withRating.map(a=> new Date(a.createdAt).getTime());
-  const allRatings = withRating.map(a=> a.rating);
   const tMin = Math.min(...allTimes), tMax = Math.max(...allTimes);
   const tRange = Math.max(1, tMax - tMin);
-  const rMin = Math.min(...allRatings), rMax = Math.max(...allRatings);
-  const rRange = Math.max(1, rMax - rMin);
 
+  // Each time control gets its own y-scale — bullet/blitz/rapid/classical ratings live on
+  // completely different scales, so sharing one axis squashed every line but one into a flat
+  // band. Independent scaling keeps each line's own ups and downs readable.
   const height = 170, width = Math.max(320, withRating.length*18);
   const xOf = (t)=> tMin===tMax ? width/2 : ((t-tMin)/tRange) * (width-24) + 12;
-  const yOf = (v)=> height - ((v-rMin)/rRange) * (height-36) - 18;
 
   let svgBody = '';
   const legendItems = [];
   Object.entries(bySpeed).forEach(([speed, list])=>{
     const color = speedColor(speed);
+    const ratings = list.map(a=>a.rating);
+    const rMin = Math.min(...ratings), rMax = Math.max(...ratings);
+    const rRange = Math.max(1, rMax - rMin);
+    const yOf = (v)=> rMin===rMax ? height/2 : height - ((v-rMin)/rRange) * (height-36) - 18;
     const coords = list.map(a=> [xOf(new Date(a.createdAt).getTime()), yOf(a.rating)]);
     if(coords.length >= 2){
       const path = coords.map((p,i)=>(i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
       svgBody += `<path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>`;
     }
     svgBody += coords.map(p=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3.5" fill="${color}"/>`).join('');
-    const last = list[list.length-1].rating;
-    legendItems.push(`<span><span class="dot" style="background:${color};"></span>${speed[0].toUpperCase()+speed.slice(1)}: ${last}</span>`);
+    const first = list[0].rating, last = list[list.length-1].rating;
+    legendItems.push(`<span><span class="dot" style="background:${color};"></span>${speed[0].toUpperCase()+speed.slice(1)}: ${first} → ${last}</span>`);
   });
 
   el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" style="width:100%; height:${height}px; display:block;">
     ${svgBody}
-    <text x="4" y="14" font-size="11" fill="#a9b6ac" font-family="IBM Plex Mono, monospace">${Math.round(rMax)}</text>
-    <text x="4" y="${height-6}" font-size="11" fill="#a9b6ac" font-family="IBM Plex Mono, monospace">${Math.round(rMin)}</text>
   </svg>
-  <div class="seg-legend" style="margin-top:8px;">${legendItems.join('')}</div>`;
+  <div class="seg-legend" style="margin-top:8px;">${legendItems.join('')}</div>
+  <p class="small" style="opacity:0.65; margin-top:4px;">Each time control is scaled to its own range — lines aren't on a shared axis.</p>`;
 }
 
 // ---- Clean rate: spotless / clean / flawed segmented bar ----
@@ -1354,42 +1386,6 @@ function renderPhaseBreakdown(analysed){
   el.innerHTML = `<div class="segbar">${bar}</div><div class="seg-legend">${legend}</div>`;
 }
 
-// ---- Worst blunders: biggest eval swings, with a jump-to-position link ----
-function renderWorstBlunders(analysed){
-  const allBlunders = analysed.flatMap(a=>a.blunderDetails || []);
-  const el = document.getElementById('worstBlunders');
-  if(allBlunders.length === 0){
-    el.innerHTML = '<div class="empty">No blunders in this set — nice.</div>';
-    return;
-  }
-  const worst = [...allBlunders].sort((a,b)=>b.cpLoss - a.cpLoss).slice(0, 8);
-  el.innerHTML = worst.map(b=>{
-    const moveLabel = `${b.moveNumber}. ${b.actualSan}`;
-    const bestLabel = b.bestSan ? ` (best: ${b.bestSan})` : '';
-    return `<div class="blunder-item" data-game-id="${b.gameId}" data-ply="${b.ply}">
-      <div>
-        <div class="move-info">${moveLabel}${bestLabel}</div>
-        <div class="move-meta">vs ${b.opponent} · ${b.phase} · ${b.gameResult}</div>
-      </div>
-      <span class="loss-badge">−${(b.cpLoss/100).toFixed(1)}</span>
-    </div>`;
-  }).join('');
-}
-document.getElementById('worstBlunders').addEventListener('click', (e)=>{
-  const item = e.target.closest('.blunder-item');
-  if(!item) return;
-  jumpToBlunder(item.dataset.gameId, parseInt(item.dataset.ply, 10));
-});
-function jumpToBlunder(gameId, ply){
-  const g = state.games.find(x=>x.id === gameId);
-  if(!g){ alert("Couldn't find that game's data — try re-fetching games from the Games tab."); return; }
-  loadGameIntoAnalysis(g, isGameUserWhite(g));
-  state.ply = ply;
-  renderBoard();
-  renderMovePanel();
-  checkDeviation();
-}
-
 // ---- Career record + recent-25-vs-lifetime, built from downloaded game metadata (no analysis needed) ----
 function scoreLine(games){
   const wins = games.filter(g=>g.result==='win').length;
@@ -1408,11 +1404,12 @@ async function renderLifetime(){
   section.classList.remove('hidden');
   all.sort((a,b)=> new Date(b.createdAt) - new Date(a.createdAt)); // newest first
 
-  const overall = scoreLine(all);
-  const white = scoreLine(all.filter(g=>g.isUserWhite));
-  const black = scoreLine(all.filter(g=>!g.isUserWhite));
-  const oldestDate = new Date(all[all.length-1].createdAt).toLocaleDateString(undefined,{month:'short', year:'numeric'});
-  document.getElementById('lifetimeCaption').textContent = `${overall.games} games downloaded, going back to ${oldestDate}.`;
+  const recent = all.slice(0, Math.min(25, all.length));
+  const overall = scoreLine(recent);
+  const white = scoreLine(recent.filter(g=>g.isUserWhite));
+  const black = scoreLine(recent.filter(g=>!g.isUserWhite));
+  const oldestDate = new Date(recent[recent.length-1].createdAt).toLocaleDateString(undefined,{month:'short', day:'numeric'});
+  document.getElementById('lifetimeCaption').textContent = `Your most recent ${recent.length} games, back to ${oldestDate}. From your downloaded career history — no re-analysis needed.`;
 
   const cards = [
     {value: `${overall.scorePct.toFixed(1)}%`, label: `Overall score · ${overall.wins}-${overall.losses}-${overall.draws}`},
@@ -1422,35 +1419,6 @@ async function renderLifetime(){
   document.getElementById('lifetimeCards').innerHTML = cards.map(c=>
     `<div class="stat-card"><div class="value">${c.value}</div><div class="label">${c.label}</div></div>`
   ).join('');
-
-  // Recent 25 vs. lifetime
-  const recentEl = document.getElementById('recentVsLifetime');
-  if(all.length < 5){
-    recentEl.innerHTML = '<div class="empty">Not enough games downloaded yet for a meaningful comparison.</div>';
-    return;
-  }
-  const recent = all.slice(0, Math.min(25, all.length));
-  const recentOverall = scoreLine(recent);
-  const recentWhite = scoreLine(recent.filter(g=>g.isUserWhite));
-  const recentBlack = scoreLine(recent.filter(g=>!g.isUserWhite));
-
-  const rows = [
-    {label:'Overall', recent: recentOverall, lifetime: overall},
-    {label:'As White', recent: recentWhite, lifetime: white},
-    {label:'As Black', recent: recentBlack, lifetime: black},
-  ];
-  recentEl.innerHTML = rows.map(r=>{
-    const delta = r.recent.games ? +(r.recent.scorePct - r.lifetime.scorePct).toFixed(1) : 0;
-    const deltaColor = delta > 0 ? 'var(--good)' : delta < 0 ? 'var(--bad)' : 'var(--text-dim)';
-    const deltaLabel = r.recent.games ? `${delta>0?'+':''}${delta}pt` : '—';
-    return `<div class="blunder-item">
-      <div>
-        <div class="move-info">${r.label}</div>
-        <div class="move-meta">Last ${r.recent.games}: ${r.recent.scorePct.toFixed(1)}% (${r.recent.wins}-${r.recent.losses}-${r.recent.draws}) · Lifetime: ${r.lifetime.scorePct.toFixed(1)}% (${r.lifetime.games} games)</div>
-      </div>
-      <span class="loss-badge" style="background:${deltaColor}; color:#0f1c17;">${deltaLabel}</span>
-    </div>`;
-  }).join('');
 }
 
 function renderBreakdown(){
@@ -1487,7 +1455,6 @@ function renderBreakdown(){
     document.getElementById('openingWeaknesses').innerHTML = '';
     document.getElementById('openingWeaknessCaption').textContent = '';
     document.getElementById('phaseBreakdown').innerHTML = '';
-    document.getElementById('worstBlunders').innerHTML = '';
     document.getElementById('radarChart').innerHTML = '';
     document.getElementById('radarCaption').textContent = '';
     return;
@@ -1516,13 +1483,19 @@ function renderBreakdown(){
   ).join('');
 
   const chartEl = document.getElementById('accuracyChart');
+  const MIN_MOVES_FOR_ACCURACY = 6; // fewer counted moves than this and one blunder can swing the average wildly
+  let prevDateStr = null;
   const bars = analysed.map((a, i)=>{
-    const acc = acplToAccuracy(a.acpl);
+    const reliable = (a.userMoveCount ?? 0) >= MIN_MOVES_FOR_ACCURACY;
+    const acc = reliable ? acplToAccuracy(a.acpl) : null;
     const pct = acc === null ? 4 : Math.max(4, acc);
     const color = acc === null ? 'var(--line)' : acc>=88 ? 'var(--good)' : acc>=72 ? 'var(--mid)' : 'var(--bad)';
-    const dateLabel = a.createdAt ? new Date(a.createdAt).toLocaleDateString(undefined,{month:'short', day:'numeric'}) : `#${i+1}`;
+    const dateStr = a.createdAt ? new Date(a.createdAt).toLocaleDateString(undefined,{month:'short', day:'numeric'}) : null;
+    const dateLabel = dateStr && dateStr !== prevDateStr ? dateStr : '';
+    prevDateStr = dateStr ?? prevDateStr;
     const pctLabel = acc === null ? '–' : Math.round(acc)+'%';
-    return `<div class="chart-bar-col">
+    const title = !reliable ? `Only ${a.userMoveCount ?? 0} moves counted — too few for a reliable accuracy figure` : `${pctLabel} accuracy`;
+    return `<div class="chart-bar-col" title="${title}">
       <div class="chart-bar" style="height:${pct}%; background:${color};"></div>
       <span class="chart-bar-label">${pctLabel}</span>
       <span class="chart-bar-label" style="opacity:0.6;">${dateLabel}</span>
@@ -1536,7 +1509,6 @@ function renderBreakdown(){
   renderColorSplit(analysed);
   renderOpeningWeaknesses(analysed);
   renderPhaseBreakdown(analysed);
-  renderWorstBlunders(analysed);
 
   // ---- Radar: your profile vs. a typical player at your rating for this time control ----
   const ratedGames = analysed.filter(a=>a.rating !== null);
