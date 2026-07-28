@@ -140,6 +140,10 @@
   .pill{ font-family:'IBM Plex Mono'; font-size:11px; padding:3px 9px; border-radius:20px; border:1px solid var(--line); color:var(--text-dim); cursor:pointer;}
   .pill.active{ border-color:var(--brass); color:var(--brass); }
   .hidden{ display:none !important; }
+  #loginGate{ position:fixed; inset:0; z-index:1000; background:var(--ink); display:flex; align-items:center; justify-content:center; padding:24px; }
+  #loginGate .login-card{ max-width:340px; width:100%; text-align:center; }
+  #loginGate h1{ font-size:32px; margin-bottom:6px; }
+  #loginGate .btn{ width:100%; padding:12px; font-size:15px; }
   .empty{ color:var(--text-dim); font-size:13px; padding:30px 0; text-align:center; }
   a{ color:var(--brass); }
 
@@ -184,6 +188,16 @@
 </style>
 </head>
 <body>
+<div id="loginGate" class="hidden">
+  <div class="login-card">
+    <h1>Ledger</h1>
+    <div class="sub" style="margin-bottom:22px;">a private chess study, built for one player</div>
+    <button class="btn" id="gateSignInBtn">Sign in with Google</button>
+    <p class="small" id="gateStatus" style="margin-top:14px; min-height:1.2em;"></p>
+    <button class="btn ghost" id="gateSkipBtn" style="margin-top:18px;">Continue without an account</button>
+    <p class="small" style="margin-top:10px; opacity:0.65;">Signing in syncs your repertoire and downloaded games across devices. Without it, everything just stays in this browser.</p>
+  </div>
+</div>
 <div class="wrap">
   <header class="top">
     <div>
@@ -439,6 +453,12 @@
     const app = initializeApp(LEDGER_FIREBASE_CONFIG);
     auth = getAuth(app);
     db = getFirestore(app);
+    // Completes the sign-in after Google redirects back here. Without this call the redirect
+    // can silently do nothing even though the user went through the Google flow successfully.
+    getRedirectResult(auth).catch(err=>{
+      console.error('Redirect sign-in failed', err);
+      window.dispatchEvent(new CustomEvent('ledgercloud-signin-error', {detail: err}));
+    });
   }
 
   // Bridge to the main (non-module) script, which can't use ES imports directly.
@@ -620,20 +640,46 @@ function cloudPushRepertoire(){
     .catch(e=> console.warn('Cloud sync failed for repertoire', e));
 }
 
+const SKIP_LOGIN_KEY = 'ledger_skip_login';
 async function initCloudSync(){
+  const gate = document.getElementById('loginGate');
   if(!window.LedgerCloud?.configured){
     document.getElementById('authArea').innerHTML = '<span class="small" style="opacity:0.6;">cloud sync not set up yet</span>';
+    gate.classList.add('hidden'); // nothing to gate on if it's not configured
     return;
   }
-  document.getElementById('signInBtn').addEventListener('click', ()=> window.LedgerCloud.signIn());
+
+  const doSignIn = ()=>{
+    document.getElementById('gateStatus').textContent = 'Opening Google sign-in…';
+    window.LedgerCloud.signIn();
+  };
+  document.getElementById('gateSignInBtn').addEventListener('click', doSignIn);
+  document.getElementById('signInBtn').addEventListener('click', doSignIn);
+  document.getElementById('gateSkipBtn').addEventListener('click', ()=>{
+    localStorage.setItem(SKIP_LOGIN_KEY, '1');
+    gate.classList.add('hidden');
+  });
   document.getElementById('signOutBtn').addEventListener('click', ()=> window.LedgerCloud.signOutUser());
+  window.addEventListener('ledgercloud-signin-error', (e)=>{
+    document.getElementById('gateStatus').textContent = 'Sign-in failed: ' + (e.detail?.message || 'unknown error') + ' — try again.';
+  });
+
+  // Show the gate until the first auth-state callback tells us whether we're signed in —
+  // avoids a flash of the sign-in screen for someone who's already logged in on this device.
+  let firstCheck = true;
   window.LedgerCloud.onAuthChange(async (user)=>{
     cloudUser = user;
     document.getElementById('signInBtn').classList.toggle('hidden', !!user);
     document.getElementById('signedInInfo').classList.toggle('hidden', !user);
-    if(!user) return;
-    document.getElementById('userEmail').textContent = user.email || user.displayName || 'signed in';
-    await syncOnSignIn(user.uid);
+    if(user){
+      document.getElementById('userEmail').textContent = user.email || user.displayName || 'signed in';
+      document.getElementById('gateStatus').textContent = `Signed in as ${user.email || user.displayName}.`;
+      gate.classList.add('hidden');
+      await syncOnSignIn(user.uid);
+    } else if(firstCheck){
+      gate.classList.toggle('hidden', localStorage.getItem(SKIP_LOGIN_KEY) === '1');
+    }
+    firstCheck = false;
   });
 }
 
