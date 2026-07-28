@@ -193,8 +193,21 @@
     <h1>Ledger</h1>
     <div class="sub" style="margin-bottom:22px;">a private chess study, built for one player</div>
     <button class="btn" id="gateSignInBtn">Sign in with Google</button>
+
+    <div class="row" style="margin:16px 0; align-items:center; gap:10px;">
+      <div style="flex:1; height:1px; background:var(--line);"></div>
+      <span class="small" style="opacity:0.6;">or</span>
+      <div style="flex:1; height:1px; background:var(--line);"></div>
+    </div>
+    <input type="email" id="gateEmail" placeholder="Email" style="width:100%; margin-bottom:8px;" autocomplete="email">
+    <input type="password" id="gatePassword" placeholder="Password" style="width:100%; margin-bottom:10px;" autocomplete="current-password">
+    <div class="row" style="gap:8px;">
+      <button class="btn ghost" id="gateEmailSignInBtn" style="flex:1;">Sign in</button>
+      <button class="btn ghost" id="gateEmailSignUpBtn" style="flex:1;">Create account</button>
+    </div>
+
     <p class="small" id="gateStatus" style="margin-top:14px; min-height:1.2em;"></p>
-    <button class="btn ghost" id="gateSkipBtn" style="margin-top:18px;">Continue without an account</button>
+    <button class="btn ghost" id="gateSkipBtn" style="margin-top:8px;">Continue without an account</button>
     <p class="small" style="margin-top:10px; opacity:0.65;">Signing in syncs your repertoire and downloaded games across devices. Without it, everything just stays in this browser.</p>
   </div>
 </div>
@@ -431,7 +444,8 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
   import {
-    getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult,
+    getAuth, GoogleAuthProvider, signInWithPopup,
+    createUserWithEmailAndPassword, signInWithEmailAndPassword,
     onAuthStateChanged, signOut
   } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
   import {
@@ -453,19 +467,18 @@
     const app = initializeApp(LEDGER_FIREBASE_CONFIG);
     auth = getAuth(app);
     db = getFirestore(app);
-    // Completes the sign-in after Google redirects back here. Without this call the redirect
-    // can silently do nothing even though the user went through the Google flow successfully.
-    getRedirectResult(auth).catch(err=>{
-      console.error('Redirect sign-in failed', err);
-      window.dispatchEvent(new CustomEvent('ledgercloud-signin-error', {detail: err}));
-    });
   }
 
   // Bridge to the main (non-module) script, which can't use ES imports directly.
   window.LedgerCloud = {
     configured,
     getUser: ()=> auth?.currentUser || null,
-    signIn: ()=> signInWithRedirect(auth, new GoogleAuthProvider()),
+    // Popup rather than redirect: redirect flow depends on browser storage surviving a full
+    // navigation away and back, which Safari's tracking-prevention frequently breaks (the app
+    // silently ends up "signed out" again on return). Popup keeps everything on one page load.
+    signIn: ()=> signInWithPopup(auth, new GoogleAuthProvider()),
+    signInEmail: (email, password)=> signInWithEmailAndPassword(auth, email, password),
+    signUpEmail: (email, password)=> createUserWithEmailAndPassword(auth, email, password),
     signOutUser: ()=> signOut(auth),
     onAuthChange: (cb)=> configured ? onAuthStateChanged(auth, cb) : null,
 
@@ -649,20 +662,42 @@ async function initCloudSync(){
     return;
   }
 
+  const showGateError = (err)=>{
+    const readable = {
+      'auth/popup-closed-by-user': 'Popup closed before finishing — try again.',
+      'auth/wrong-password': 'Wrong password.',
+      'auth/user-not-found': 'No account with that email — try "Create account" instead.',
+      'auth/email-already-in-use': 'An account already exists with that email — try "Sign in" instead.',
+      'auth/weak-password': 'Password needs to be at least 6 characters.',
+      'auth/invalid-email': 'That doesn\'t look like a valid email address.',
+    }[err?.code] || (err?.message || 'Something went wrong — try again.');
+    document.getElementById('gateStatus').textContent = readable;
+  };
   const doSignIn = ()=>{
     document.getElementById('gateStatus').textContent = 'Opening Google sign-in…';
-    window.LedgerCloud.signIn();
+    window.LedgerCloud.signIn().catch(showGateError);
   };
   document.getElementById('gateSignInBtn').addEventListener('click', doSignIn);
   document.getElementById('signInBtn').addEventListener('click', doSignIn);
+  document.getElementById('gateEmailSignInBtn').addEventListener('click', ()=>{
+    const email = document.getElementById('gateEmail').value.trim();
+    const password = document.getElementById('gatePassword').value;
+    if(!email || !password){ document.getElementById('gateStatus').textContent = 'Enter both email and password.'; return; }
+    document.getElementById('gateStatus').textContent = 'Signing in…';
+    window.LedgerCloud.signInEmail(email, password).catch(showGateError);
+  });
+  document.getElementById('gateEmailSignUpBtn').addEventListener('click', ()=>{
+    const email = document.getElementById('gateEmail').value.trim();
+    const password = document.getElementById('gatePassword').value;
+    if(!email || !password){ document.getElementById('gateStatus').textContent = 'Enter both email and password.'; return; }
+    document.getElementById('gateStatus').textContent = 'Creating account…';
+    window.LedgerCloud.signUpEmail(email, password).catch(showGateError);
+  });
   document.getElementById('gateSkipBtn').addEventListener('click', ()=>{
     localStorage.setItem(SKIP_LOGIN_KEY, '1');
     gate.classList.add('hidden');
   });
   document.getElementById('signOutBtn').addEventListener('click', ()=> window.LedgerCloud.signOutUser());
-  window.addEventListener('ledgercloud-signin-error', (e)=>{
-    document.getElementById('gateStatus').textContent = 'Sign-in failed: ' + (e.detail?.message || 'unknown error') + ' — try again.';
-  });
 
   // Show the gate until the first auth-state callback tells us whether we're signed in —
   // avoids a flash of the sign-in screen for someone who's already logged in on this device.
