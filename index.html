@@ -355,7 +355,14 @@
         <div id="repLibrary"></div>
       </div>
       <div style="flex:1; min-width:280px;">
-        <label for="pgnImport">Import PGN or Lichess study (paste PGN text)</label>
+        <label for="studyImportUrl">Import a Lichess study (whole thing, one line per chapter)</label>
+        <input type="text" id="studyImportUrl" placeholder="https://lichess.org/study/xxxxxxxx" style="width:100%;">
+        <div class="row" style="margin-top:8px;">
+          <button class="btn" id="importStudyBtn">Import study into white repertoire</button>
+        </div>
+        <p class="small" id="studyImportStatus" style="margin-top:6px; opacity:0.8;"></p>
+
+        <label for="pgnImport" style="margin-top:18px;">Or paste a single PGN line</label>
         <textarea id="pgnImport" placeholder="1. e4 c5 2. Nf3 d6 3. d4 cxd4 ..."></textarea>
         <label for="pgnImportName" style="margin-top:8px;">Name this line</label>
         <input type="text" id="pgnImportName" placeholder="e.g. Sicilian: Najdorf" style="width:100%;">
@@ -1596,6 +1603,7 @@ function setRepColor(c){
   state.repColor = c;
   document.getElementById('repWhitePill').classList.toggle('active', c==='white');
   document.getElementById('repBlackPill').classList.toggle('active', c==='black');
+  document.getElementById('importStudyBtn').textContent = `Import study into ${c} repertoire`;
   renderRepTree();
 }
 function saveRepertoire(){
@@ -1650,6 +1658,54 @@ function buildTreeFromLines(lines){
 function childMoves(node){
   return Object.keys(node).filter(k => k !== '__lines');
 }
+// ---- Import a whole Lichess study: one repertoire line per chapter ----
+// Sub-variations recorded *within* a chapter (PGN's parenthesised alternatives) aren't named in
+// the PGN itself, so this imports each chapter's mainline only — the existing prefix-based
+// auto-placement then nests chapters that share an opening under one another automatically.
+function stripPgnVariations(text){
+  let result = '', depth = 0;
+  for(const ch of text){
+    if(ch === '('){ depth++; continue; }
+    if(ch === ')'){ if(depth>0) depth--; continue; }
+    if(depth === 0) result += ch;
+  }
+  return result;
+}
+function extractStudyId(input){
+  const m = input.trim().match(/study\/([a-zA-Z0-9]+)/);
+  return m ? m[1] : (/^[a-zA-Z0-9]{6,10}$/.test(input.trim()) ? input.trim() : null);
+}
+document.getElementById('importStudyBtn').addEventListener('click', async ()=>{
+  const status = document.getElementById('studyImportStatus');
+  const studyId = extractStudyId(document.getElementById('studyImportUrl').value);
+  if(!studyId){ status.textContent = "Couldn't find a study ID in that — paste the full lichess.org/study/... URL."; return; }
+  status.textContent = 'Fetching study…';
+  try{
+    const res = await fetch(`https://lichess.org/api/study/${studyId}.pgn`);
+    if(!res.ok) throw new Error(`Lichess responded ${res.status}`);
+    const text = await res.text();
+    const chapters = text.split(/\n(?=\[Event )/).map(c=>c.trim()).filter(Boolean);
+    if(chapters.length === 0) throw new Error('No chapters found in that study.');
+    let imported = 0, skipped = 0;
+    for(const chapter of chapters){
+      const eventMatch = chapter.match(/\[Event\s+"([^"]*)"\]/);
+      let name = eventMatch ? eventMatch[1] : null;
+      if(name && name.includes(': ')) name = name.split(': ').slice(1).join(': '); // drop "Study name: " prefix, keep chapter title
+      if(!name) name = `Chapter ${imported + skipped + 1}`;
+      const mainlineText = stripPgnVariations(chapter);
+      const sanMoves = parseMovesString(mainlineText);
+      const {sanClean} = buildPositions(sanMoves);
+      if(sanClean.length === 0){ skipped++; continue; }
+      const added = addRepertoireLine(state.repColor, name, null, sanClean);
+      if(added) imported++; else skipped++;
+    }
+    renderRepTree();
+    status.textContent = `Imported ${imported} chapter${imported===1?'':'s'}${skipped ? ` (${skipped} skipped — empty or already in your library)` : ''} into your ${state.repColor} repertoire.`;
+  }catch(err){
+    console.error(err);
+    status.textContent = 'Could not import that study: ' + err.message;
+  }
+});
 document.getElementById('importPgnBtn').addEventListener('click', ()=>{
   const text = document.getElementById('pgnImport').value;
   const name = document.getElementById('pgnImportName').value.trim();
