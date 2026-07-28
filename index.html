@@ -126,7 +126,8 @@
   .rep-row:hover{ background:var(--panel-2); }
   .rep-toggle{ flex:none; width:20px; height:20px; border-radius:4px; border:1px solid var(--line); background:var(--panel-2); color:var(--brass); font-family:'IBM Plex Mono', monospace; font-size:12px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
   .rep-toggle.spacer{ visibility:hidden; }
-  .rep-name{ font-weight:600; font-size:13px; }
+  .rep-name{ font-weight:600; font-size:13px; cursor:pointer; }
+  .rep-name:hover{ color:var(--brass); text-decoration:underline; }
   .rep-eco{ font-family:'IBM Plex Mono', monospace; font-size:10px; color:var(--text-dim); }
   .rep-preview{ font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--text-dim); opacity:0.75; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
   .rep-row-actions{ flex:none; display:flex; gap:4px; margin-left:auto; }
@@ -346,15 +347,33 @@
 
   <!-- REPERTOIRE TAB -->
   <section id="tab-repertoire" class="panel hidden">
+    <div id="repBoardPanel" class="hidden" style="margin-bottom:20px;">
+      <div class="flex-between" style="margin-bottom:8px;">
+        <span class="small" id="repBoardTitle"></span>
+        <button class="btn ghost" id="repBoardClose">✕ Close</button>
+      </div>
+      <div style="max-width:280px; margin:0 auto;">
+        <div class="board" id="repBoard"></div>
+      </div>
+      <div class="row" style="justify-content:center; gap:6px; margin-top:10px; align-items:center;">
+        <button class="icon" id="repBoardStart">⏮</button>
+        <button class="icon" id="repBoardPrev">◀</button>
+        <span class="small" id="repBoardMoveLabel"></span>
+        <button class="icon" id="repBoardNext">▶</button>
+        <button class="icon" id="repBoardEnd">⏭</button>
+      </div>
+    </div>
+
     <div class="row" style="margin-bottom:16px;">
       <span class="pill active" id="repWhitePill">White repertoire</span>
       <span class="pill" id="repBlackPill">Black repertoire</span>
     </div>
-    <div class="row" style="align-items:flex-start; gap:24px;">
-      <div style="flex:1; min-width:260px;">
-        <div id="repLibrary"></div>
-      </div>
-      <div style="flex:1; min-width:280px;">
+
+    <div id="repLibrary"></div>
+
+    <details style="margin-top:22px;">
+      <summary style="cursor:pointer; color:var(--brass); font-size:13px; font-weight:600;">+ Add to library</summary>
+      <div style="margin-top:14px; max-width:420px;">
         <label for="studyImportUrl">Import a Lichess study (whole thing, one line per chapter)</label>
         <input type="text" id="studyImportUrl" placeholder="https://lichess.org/study/xxxxxxxx" style="width:100%;">
         <div class="row" style="margin-top:8px;">
@@ -371,7 +390,7 @@
           <button class="btn ghost" id="clearRepBtn">Clear this repertoire</button>
         </div>
       </div>
-    </div>
+    </details>
   </section>
 
   <footer style="margin-top:32px; text-align:center;">
@@ -934,8 +953,12 @@ const PIECE_GLYPH_FALLBACK = {
 
 async function renderBoard(){
   await ensurePieceSprite();
-  const fen = state.positions[state.ply];
-  const boardEl = document.getElementById('board');
+  drawBoardSquares(state.positions[state.ply], 'board');
+  const evalCp = state.moveEvals[state.ply]?.cp;
+  updateEvalBar(evalCp);
+}
+function drawBoardSquares(fen, elId){
+  const boardEl = document.getElementById(elId);
   boardEl.innerHTML = '';
   const rows = fen.split(' ')[0].split('/');
   for(let r=0;r<8;r++){
@@ -946,8 +969,6 @@ async function renderBoard(){
       } else { addSquare(boardEl, r, c, ch); c++; }
     }
   }
-  const evalCp = state.moveEvals[state.ply]?.cp;
-  updateEvalBar(evalCp);
 }
 function addSquare(boardEl, r, c, piece){
   const div = document.createElement('div');
@@ -1604,8 +1625,39 @@ function setRepColor(c){
   document.getElementById('repWhitePill').classList.toggle('active', c==='white');
   document.getElementById('repBlackPill').classList.toggle('active', c==='black');
   document.getElementById('importStudyBtn').textContent = `Import study into ${c} repertoire`;
+  closeRepBoard();
   renderRepTree();
 }
+
+/* ---- Click-through board for a repertoire line ---- */
+let repBoardPositions = [];
+let repBoardSanMoves = [];
+let repBoardPly = 0;
+function openRepLine(line){
+  const {positions, sanClean} = buildPositions(line.moves);
+  repBoardPositions = positions;
+  repBoardSanMoves = sanClean;
+  repBoardPly = 0; // start at the beginning so you can click through move by move
+  document.getElementById('repBoardTitle').textContent = line.name;
+  document.getElementById('repBoardPanel').classList.remove('hidden');
+  renderRepBoard();
+  document.getElementById('repBoardPanel').scrollIntoView({behavior:'smooth', block:'start'});
+}
+function closeRepBoard(){
+  document.getElementById('repBoardPanel').classList.add('hidden');
+}
+async function renderRepBoard(){
+  await ensurePieceSprite();
+  drawBoardSquares(repBoardPositions[repBoardPly], 'repBoard');
+  const total = repBoardSanMoves.length;
+  document.getElementById('repBoardMoveLabel').textContent = repBoardPly===0 ? 'Start' : `${Math.ceil(repBoardPly/2)}. ${repBoardPly%2===1?'':'…'}${repBoardSanMoves[repBoardPly-1]} (${repBoardPly}/${total})`;
+}
+document.getElementById('repBoardClose').addEventListener('click', closeRepBoard);
+document.getElementById('repBoardStart').addEventListener('click', ()=>{ repBoardPly=0; renderRepBoard(); });
+document.getElementById('repBoardEnd').addEventListener('click', ()=>{ repBoardPly=repBoardPositions.length-1; renderRepBoard(); });
+document.getElementById('repBoardPrev').addEventListener('click', ()=>{ if(repBoardPly>0){ repBoardPly--; renderRepBoard(); } });
+document.getElementById('repBoardNext').addEventListener('click', ()=>{ if(repBoardPly<repBoardPositions.length-1){ repBoardPly++; renderRepBoard(); } });
+
 function saveRepertoire(){
   localStorage.setItem('ledger_repertoire', JSON.stringify(state.repertoire));
 }
@@ -1752,6 +1804,7 @@ document.getElementById('clearRepBtn').addEventListener('click', ()=>{
   if(!confirm(`Clear your entire ${state.repColor} repertoire?`)) return;
   state.repertoire[state.repColor] = [];
   saveRepertoire();
+  closeRepBoard();
   renderRepTree();
 });
 // Renders the library as nested, collapsible headings (main opening -> variation -> sub-variation,
@@ -1788,7 +1841,7 @@ function renderRepTree(){
     return `<div>
       <div class="rep-row">
         ${toggleBtn}
-        <span class="rep-name">${line.name}</span>${eco}
+        <span class="rep-name" data-view="${line.id}">${line.name}</span>${eco}
         <span class="rep-preview">${preview}</span>
         <span class="rep-row-actions">
           <button class="btn ghost" data-rename="${line.id}">✎</button>
@@ -1807,6 +1860,12 @@ document.getElementById('repLibrary').addEventListener('click', (e)=>{
   const toggleId = e.target.dataset.toggle;
   const renameId = e.target.dataset.rename;
   const deleteId = e.target.dataset.delete;
+  const viewId = e.target.dataset.view;
+  if(viewId){
+    const line = state.repertoire[state.repColor].find(l=>l.id===viewId);
+    if(line) openRepLine(line);
+    return;
+  }
   if(toggleId){
     const childrenEl = document.getElementById('rep-children-' + toggleId);
     if(!childrenEl) return;
