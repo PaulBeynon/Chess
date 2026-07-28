@@ -190,7 +190,16 @@
       <h1>Ledger</h1>
       <div class="sub">a private chess study, built for one player</div>
     </div>
-    <div class="sub" id="engineStatus">engine: idle</div>
+    <div class="row" style="gap:14px; align-items:center;">
+      <div class="sub" id="engineStatus">engine: idle</div>
+      <div id="authArea">
+        <button class="btn ghost" id="signInBtn">Sign in with Google</button>
+        <span id="signedInInfo" class="hidden small">
+          <span id="userEmail"></span>
+          <button class="btn ghost" id="signOutBtn">Sign out</button>
+        </span>
+      </div>
+    </div>
   </header>
 
   <nav class="tabs">
@@ -399,6 +408,82 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+
+<!-- ---------------- FIREBASE (login + cloud sync) ----------------
+     TODO before this works: create a Firebase project, enable Google sign-in under
+     Authentication, enable Firestore, then paste the project's config into
+     LEDGER_FIREBASE_CONFIG below. See setup notes from Claude for the exact steps
+     and the Firestore security rules to paste in alongside it. -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+  import {
+    getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult,
+    onAuthStateChanged, signOut
+  } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+  import {
+    getFirestore, doc, setDoc, getDoc, deleteDoc, collection, getDocs, writeBatch
+  } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+  const LEDGER_FIREBASE_CONFIG = {
+    apiKey: "REPLACE_ME",
+    authDomain: "REPLACE_ME.firebaseapp.com",
+    projectId: "REPLACE_ME",
+    storageBucket: "REPLACE_ME.appspot.com",
+    messagingSenderId: "REPLACE_ME",
+    appId: "REPLACE_ME"
+  };
+  const configured = LEDGER_FIREBASE_CONFIG.apiKey !== "REPLACE_ME";
+
+  let auth = null, db = null;
+  if(configured){
+    const app = initializeApp(LEDGER_FIREBASE_CONFIG);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  }
+
+  // Bridge to the main (non-module) script, which can't use ES imports directly.
+  window.LedgerCloud = {
+    configured,
+    getUser: ()=> auth?.currentUser || null,
+    signIn: ()=> signInWithRedirect(auth, new GoogleAuthProvider()),
+    signOutUser: ()=> signOut(auth),
+    onAuthChange: (cb)=> configured ? onAuthStateChanged(auth, cb) : null,
+
+    // Repertoire: one doc per user, holds {white:[...], black:[...]}
+    pushRepertoire: async (uid, repertoire)=>{
+      await setDoc(doc(db, 'users', uid, 'repertoire', 'current'), repertoire);
+    },
+    pullRepertoire: async (uid)=>{
+      const snap = await getDoc(doc(db, 'users', uid, 'repertoire', 'current'));
+      return snap.exists() ? snap.data() : null;
+    },
+
+    // Generic per-record collections: lifetimeGames and analysisCache, one doc per record.
+    pushRecords: async (uid, storeName, records, keyField)=>{
+      // Firestore batches cap at 500 writes; chunk larger sets.
+      for(let i=0; i<records.length; i+=450){
+        const batch = writeBatch(db);
+        records.slice(i, i+450).forEach(r=>{
+          batch.set(doc(db, 'users', uid, storeName, String(r[keyField])), r);
+        });
+        await batch.commit();
+      }
+    },
+    pullRecords: async (uid, storeName)=>{
+      const snap = await getDocs(collection(db, 'users', uid, storeName));
+      return snap.docs.map(d=>d.data());
+    },
+    clearRecords: async (uid, storeName)=>{
+      const snap = await getDocs(collection(db, 'users', uid, storeName));
+      for(let i=0; i<snap.docs.length; i+=450){
+        const batch = writeBatch(db);
+        snap.docs.slice(i, i+450).forEach(d=> batch.delete(d.ref));
+        await batch.commit();
+      }
+    }
+  };
+</script>
+
 <script>
 /* ---------------- STATE ---------------- */
 // Repertoire storage migrated from an anonymous merged move-tree ({white:{e4:{...}}}) to a
@@ -473,12 +558,13 @@ function openLedgerDB(){
 async function idbPutAll(storeName, records){
   if(records.length === 0) return;
   const db = await openLedgerDB();
-  return new Promise((resolve, reject)=>{
+  await new Promise((resolve, reject)=>{
     const tx = db.transaction(storeName, 'readwrite');
     records.forEach(r=> tx.objectStore(storeName).put(r));
     tx.oncomplete = ()=> resolve();
     tx.onerror = ()=> reject(tx.error);
   });
+  cloudPushStore(storeName, records); // fire-and-forget; local write already succeeded either way
 }
 async function idbPut(storeName, record){
   return idbPutAll(storeName, [record]);
@@ -508,6 +594,83 @@ async function idbClear(storeName){
     tx.onerror = ()=> reject(tx.error);
   });
 }
+
+/* ---------------- CLOUD SYNC (login required) ----------------
+   Firestore holds the same three things IndexedDB/localStorage already hold locally:
+   repertoire, lifetimeGames, analysisCache — one Google account, synced across devices.
+   Local storage stays the fast/offline-capable source of truth for rendering; Firestore is
+   the durable copy that gets pushed to on every write, and pulled from on sign-in.
+------------------------------------------------------------------- */
+let cloudUser = null;
+const STORE_KEY_FIELDS = { lifetimeGames: 'id', analysisCache: 'gameId' };
+
+function cloudPushStore(storeName, records){
+  if(!cloudUser || !window.LedgerCloud?.configured) return;
+  const keyField = STORE_KEY_FIELDS[storeName];
+  if(!keyField) return;
+  window.LedgerCloud.pushRecords(cloudUser.uid, storeName, records, keyField)
+    .catch(e=> console.warn(`Cloud sync failed for ${storeName}`, e));
+}
+function cloudPushRepertoire(){
+  if(!cloudUser || !window.LedgerCloud?.configured) return;
+  window.LedgerCloud.pushRepertoire(cloudUser.uid, state.repertoire)
+    .catch(e=> console.warn('Cloud sync failed for repertoire', e));
+}
+
+async function initCloudSync(){
+  if(!window.LedgerCloud?.configured){
+    document.getElementById('authArea').innerHTML = '<span class="small" style="opacity:0.6;">cloud sync not set up yet</span>';
+    return;
+  }
+  document.getElementById('signInBtn').addEventListener('click', ()=> window.LedgerCloud.signIn());
+  document.getElementById('signOutBtn').addEventListener('click', ()=> window.LedgerCloud.signOutUser());
+  window.LedgerCloud.onAuthChange(async (user)=>{
+    cloudUser = user;
+    document.getElementById('signInBtn').classList.toggle('hidden', !!user);
+    document.getElementById('signedInInfo').classList.toggle('hidden', !user);
+    if(!user) return;
+    document.getElementById('userEmail').textContent = user.email || user.displayName || 'signed in';
+    await syncOnSignIn(user.uid);
+  });
+}
+
+// Runs once per sign-in: if the cloud already has data (this device or another one previously
+// synced), it wins and overwrites what's local — that's the expected "log in on a new device
+// and get my stuff" behaviour. If the cloud is empty (first-ever sign-in), whatever's already
+// in this browser gets pushed up instead, so nothing gets lost on the first login.
+async function syncOnSignIn(uid){
+  try{
+    const cloudRepertoire = await window.LedgerCloud.pullRepertoire(uid);
+    if(cloudRepertoire){
+      state.repertoire = { white: cloudRepertoire.white || [], black: cloudRepertoire.black || [] };
+      localStorage.setItem('ledger_repertoire', JSON.stringify(state.repertoire));
+      if(document.getElementById('repLibrary')) renderRepTree();
+    } else {
+      await window.LedgerCloud.pushRepertoire(uid, state.repertoire);
+    }
+
+    for(const storeName of ['lifetimeGames', 'analysisCache']){
+      const cloudRecords = await window.LedgerCloud.pullRecords(uid, storeName);
+      if(cloudRecords.length > 0){
+        await idbClear(storeName);
+        const db = await openLedgerDB();
+        await new Promise((resolve, reject)=>{
+          const tx = db.transaction(storeName, 'readwrite');
+          cloudRecords.forEach(r=> tx.objectStore(storeName).put(r));
+          tx.oncomplete = ()=> resolve();
+          tx.onerror = ()=> reject(tx.error);
+        });
+      } else {
+        const localRecords = await idbGetAll(storeName);
+        if(localRecords.length > 0) cloudPushStore(storeName, localRecords);
+      }
+    }
+    if(document.getElementById('tab-breakdown') && !document.getElementById('tab-breakdown').classList.contains('hidden')) renderLifetime();
+  }catch(e){
+    console.warn('Cloud sync on sign-in failed', e);
+  }
+}
+initCloudSync();
 
 /* ---------------- TABS ---------------- */
 document.querySelectorAll('.tab-btn').forEach(btn=>{
@@ -1660,6 +1823,7 @@ document.getElementById('repBoardNext').addEventListener('click', ()=>{ if(repBo
 
 function saveRepertoire(){
   localStorage.setItem('ledger_repertoire', JSON.stringify(state.repertoire));
+  cloudPushRepertoire();
 }
 // Adds one named line to the library, automatically working out where it belongs in the
 // hierarchy: it nests under the existing line whose moves are the longest matching prefix of
