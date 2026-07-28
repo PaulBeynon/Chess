@@ -482,6 +482,9 @@
       }
     }
   };
+  // This module script is deferred by the browser and can run *after* the classic <script>
+  // below it, so that script can't assume window.LedgerCloud exists yet — it waits for this.
+  window.dispatchEvent(new Event('ledgercloud-ready'));
 </script>
 
 <script>
@@ -670,7 +673,7 @@ async function syncOnSignIn(uid){
     console.warn('Cloud sync on sign-in failed', e);
   }
 }
-initCloudSync();
+if(window.LedgerCloud){ initCloudSync(); } else { window.addEventListener('ledgercloud-ready', initCloudSync, {once:true}); }
 
 /* ---------------- TABS ---------------- */
 document.querySelectorAll('.tab-btn').forEach(btn=>{
