@@ -1671,6 +1671,15 @@ function stripPgnVariations(text){
   }
   return result;
 }
+// Strips variations, then parses to a clean SAN move list, validating each move against the
+// board as it goes (via buildPositions) so one bad token doesn't silently truncate everything
+// after it without explanation.
+function parsePgnChapterMoves(text){
+  const mainlineText = stripPgnVariations(text);
+  const sanMoves = parseMovesString(mainlineText);
+  const {sanClean} = buildPositions(sanMoves);
+  return sanClean;
+}
 function extractStudyId(input){
   const m = input.trim().match(/study\/([a-zA-Z0-9]+)/);
   return m ? m[1] : (/^[a-zA-Z0-9]{6,10}$/.test(input.trim()) ? input.trim() : null);
@@ -1692,9 +1701,7 @@ document.getElementById('importStudyBtn').addEventListener('click', async ()=>{
       let name = eventMatch ? eventMatch[1] : null;
       if(name && name.includes(': ')) name = name.split(': ').slice(1).join(': '); // drop "Study name: " prefix, keep chapter title
       if(!name) name = `Chapter ${imported + skipped + 1}`;
-      const mainlineText = stripPgnVariations(chapter);
-      const sanMoves = parseMovesString(mainlineText);
-      const {sanClean} = buildPositions(sanMoves);
+      const sanClean = parsePgnChapterMoves(chapter);
       if(sanClean.length === 0){ skipped++; continue; }
       const added = addRepertoireLine(state.repColor, name, null, sanClean);
       if(added) imported++; else skipped++;
@@ -1709,9 +1716,32 @@ document.getElementById('importStudyBtn').addEventListener('click', async ()=>{
 document.getElementById('importPgnBtn').addEventListener('click', ()=>{
   const text = document.getElementById('pgnImport').value;
   const name = document.getElementById('pgnImportName').value.trim();
-  const sanMoves = parseMovesString(text);
-  const {sanClean} = buildPositions(sanMoves);
-  if(sanClean.length === 0){ alert('Could not parse any moves from that PGN.'); return; }
+  if(!text.trim()){ alert('Paste some PGN first.'); return; }
+
+  // Handle a paste containing multiple games/chapters (e.g. Lichess's "Study PGN" download,
+  // pasted here instead of using the URL importer above) the same way the study importer does.
+  const chunks = text.trim().split(/\n(?=\[Event )/).map(c=>c.trim()).filter(Boolean);
+  if(chunks.length > 1){
+    let imported = 0, skipped = 0;
+    chunks.forEach((chunk, idx)=>{
+      const eventMatch = chunk.match(/\[Event\s+"([^"]*)"\]/);
+      let chapterName = eventMatch ? eventMatch[1] : null;
+      if(chapterName && chapterName.includes(': ')) chapterName = chapterName.split(': ').slice(1).join(': ');
+      if(!chapterName) chapterName = name ? `${name} ${idx+1}` : `Line ${idx+1}`;
+      const sanClean = parsePgnChapterMoves(chunk);
+      if(sanClean.length === 0){ skipped++; return; }
+      const added = addRepertoireLine(state.repColor, chapterName, null, sanClean);
+      if(added) imported++; else skipped++;
+    });
+    renderRepTree();
+    alert(`Detected ${chunks.length} games in that paste — imported ${imported}${skipped ? `, skipped ${skipped}` : ''}.`);
+    document.getElementById('pgnImport').value = '';
+    document.getElementById('pgnImportName').value = '';
+    return;
+  }
+
+  const sanClean = parsePgnChapterMoves(text);
+  if(sanClean.length === 0){ alert("Could not parse any moves from that PGN — check it's plain move text (e.g. \"1. e4 e5 2. Nf3\"), not a link or an empty chapter."); return; }
   if(!name){ alert('Give this line a name first — that\'s what turns your repertoire into a browsable library.'); return; }
   addRepertoireLine(state.repColor, name, null, sanClean);
   renderRepTree();
