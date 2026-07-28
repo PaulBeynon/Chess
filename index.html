@@ -128,6 +128,14 @@
   .rep-card .rep-moves{ font-family:'IBM Plex Mono', monospace; font-size:12px; color:var(--text-dim); margin-top:5px; line-height:1.5; word-break:break-word; }
   .rep-card .rep-actions{ margin-top:8px; display:flex; gap:8px; }
   .rep-card .rep-actions button{ font-size:11px; padding:4px 9px; }
+  .rep-node{ margin-bottom:6px; }
+  .rep-node > summary{ cursor:pointer; list-style:none; padding:8px 10px; border-radius:6px; background:var(--panel-2); border:1px solid var(--line); display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  .rep-node > summary::-webkit-details-marker{ display:none; }
+  .rep-node > summary::before{ content:'▸'; color:var(--brass); font-size:11px; margin-right:2px; }
+  .rep-node[open] > summary::before{ content:'▾'; }
+  .rep-node .rep-children{ margin-left:20px; padding-left:12px; border-left:1px dashed var(--line); margin-top:8px; }
+  .rep-node .rep-actions{ margin:8px 0 4px 0; display:flex; gap:8px; }
+  .rep-node .rep-actions button{ font-size:11px; padding:4px 9px; }
   .small{ font-size:12px; color:var(--text-dim); }
   .flex-between{ display:flex; justify-content:space-between; align-items:center; }
   .pill{ font-family:'IBM Plex Mono'; font-size:11px; padding:3px 9px; border-radius:20px; border:1px solid var(--line); color:var(--text-dim); cursor:pointer;}
@@ -353,6 +361,8 @@
         <textarea id="pgnImport" placeholder="1. e4 c5 2. Nf3 d6 3. d4 cxd4 ..."></textarea>
         <label for="pgnImportName" style="margin-top:8px;">Name this line</label>
         <input type="text" id="pgnImportName" placeholder="e.g. Sicilian: Najdorf" style="width:100%;">
+        <label for="pgnImportParent" style="margin-top:8px;">Parent (leave as top-level for a main opening)</label>
+        <select id="pgnImportParent" style="width:100%;"></select>
         <div class="row" style="margin-top:8px;">
           <button class="btn" id="importPgnBtn">Add to library</button>
           <button class="btn ghost" id="clearRepBtn">Clear this repertoire</button>
@@ -381,13 +391,13 @@ function loadRepertoire(){
   for(const color of ['white','black']){
     const val = raw[color];
     if(Array.isArray(val)){
-      migrated[color] = val;
+      migrated[color] = val.map(l=> ({...l, parentId: l.parentId ?? null}));
     } else if(val && typeof val === 'object' && Object.keys(val).length){
       let n = 0;
       const walk = (node, path)=>{
         const keys = Object.keys(node);
         if(keys.length === 0){
-          if(path.length) migrated[color].push({id: 'mig_'+(++n), name: `Imported line ${n}`, eco: null, moves: path.slice()});
+          if(path.length) migrated[color].push({id: 'mig_'+(++n), name: `Imported line ${n}`, eco: null, moves: path.slice(), parentId: null});
           return;
         }
         for(const k of keys) walk(node[k], [...path, k]);
@@ -1595,13 +1605,15 @@ function setRepColor(c){
 function saveRepertoire(){
   localStorage.setItem('ledger_repertoire', JSON.stringify(state.repertoire));
 }
-// Adds one named line to the library. If an identical line (same colour, same move sequence)
-// already exists, does nothing — avoids piling up duplicates from repeated "add to repertoire" clicks.
-function addRepertoireLine(color, name, eco, moves){
+// Adds one named line to the library. parentId nests it as a sub-variation under an existing
+// line (e.g. "Vienna Gambit" -> "Steinitz Gambit" -> a further sub-line), or null for a new
+// main-opening heading. If an identical line (same colour, same move sequence) already exists,
+// does nothing — avoids piling up duplicates from repeated "add to repertoire" clicks.
+function addRepertoireLine(color, name, eco, moves, parentId){
   const lines = state.repertoire[color];
   const movesKey = moves.join('|');
   if(lines.some(l => l.moves.join('|') === movesKey)) return null;
-  const line = { id: 'line_' + Date.now() + '_' + Math.floor(Math.random()*1000), name: name || 'Untitled line', eco: eco || null, moves: moves.slice() };
+  const line = { id: 'line_' + Date.now() + '_' + Math.floor(Math.random()*1000), name: name || 'Untitled line', eco: eco || null, moves: moves.slice(), parentId: parentId || null };
   lines.push(line);
   saveRepertoire();
   return line;
@@ -1624,14 +1636,24 @@ function buildTreeFromLines(lines){
 function childMoves(node){
   return Object.keys(node).filter(k => k !== '__lines');
 }
+function populateParentPicker(){
+  const sel = document.getElementById('pgnImportParent');
+  const lines = state.repertoire[state.repColor];
+  const byId = new Map(lines.map(l=>[l.id, l]));
+  const depthOf = (l)=>{ let d=0, cur=l; while(cur.parentId && byId.has(cur.parentId)){ cur = byId.get(cur.parentId); d++; if(d>20) break; } return d; };
+  const sorted = [...lines].sort((a,b)=> depthOf(a)-depthOf(b));
+  sel.innerHTML = '<option value="">— New top-level opening —</option>' +
+    sorted.map(l=> `<option value="${l.id}">${'— '.repeat(depthOf(l))}${l.name}</option>`).join('');
+}
 document.getElementById('importPgnBtn').addEventListener('click', ()=>{
   const text = document.getElementById('pgnImport').value;
   const name = document.getElementById('pgnImportName').value.trim();
+  const parentId = document.getElementById('pgnImportParent').value || null;
   const sanMoves = parseMovesString(text);
   const {sanClean} = buildPositions(sanMoves);
   if(sanClean.length === 0){ alert('Could not parse any moves from that PGN.'); return; }
   if(!name){ alert('Give this line a name first — that\'s what turns your repertoire into a browsable library.'); return; }
-  addRepertoireLine(state.repColor, name, null, sanClean);
+  addRepertoireLine(state.repColor, name, null, sanClean, parentId);
   renderRepTree();
   document.getElementById('pgnImport').value = '';
   document.getElementById('pgnImportName').value = '';
@@ -1642,25 +1664,49 @@ document.getElementById('clearRepBtn').addEventListener('click', ()=>{
   saveRepertoire();
   renderRepTree();
 });
+// Renders the library as nested, collapsible headings (main opening -> variation -> sub-variation,
+// arbitrarily deep) using native <details>/<summary> so each branch is click-to-expand.
 function renderRepTree(){
   const container = document.getElementById('repLibrary');
   const lines = state.repertoire[state.repColor];
+  populateParentPicker();
   if(lines.length === 0){
     container.innerHTML = '<div class="empty">No lines yet. Import a PGN, or add deviations from the Analysis tab.</div>';
     return;
   }
-  container.innerHTML = lines.map(line=>{
-    const preview = line.moves.map((san,i)=> (i%2===0 ? `${i/2+1}.${san}` : san)).join(' ');
+  const byParent = new Map();
+  lines.forEach(l=>{
+    const key = l.parentId || '__root';
+    if(!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key).push(l);
+  });
+  const byId = new Map(lines.map(l=>[l.id, l]));
+  const renderNode = (line)=>{
+    const parentMoveCount = byId.get(line.parentId)?.moves.length || 0;
+    const ownMoves = line.moves.slice(parentMoveCount);
+    const preview = ownMoves.map((san, j)=>{
+      const i = parentMoveCount + j; // absolute ply index for correct move numbering
+      return i%2===0 ? `${i/2+1}.${san}` : san;
+    }).join(' ');
     const eco = line.eco ? `<span class="rep-eco">${line.eco}</span>` : '';
-    return `<div class="rep-card">
-      <span class="rep-name">${line.name}</span>${eco}
+    const children = byParent.get(line.id) || [];
+    const childrenHtml = children.length ? `<div class="rep-children">${children.map(renderNode).join('')}</div>` : '';
+    return `<details class="rep-node" open>
+      <summary>
+        <span class="rep-name">${line.name}</span>${eco}
+      </summary>
       <div class="rep-moves">${preview}</div>
       <div class="rep-actions">
         <button class="btn ghost" data-rename="${line.id}">Rename</button>
         <button class="btn ghost" data-delete="${line.id}">Delete</button>
       </div>
-    </div>`;
-  }).join('');
+      ${childrenHtml}
+    </details>`;
+  };
+  const topLevel = byParent.get('__root') || [];
+  container.innerHTML = topLevel.length
+    ? topLevel.map(renderNode).join('')
+    : '<div class="empty">No top-level openings yet — everything currently in this library is nested under a missing parent.</div>';
 }
 document.getElementById('repLibrary').addEventListener('click', (e)=>{
   const renameId = e.target.dataset.rename;
@@ -1671,8 +1717,20 @@ document.getElementById('repLibrary').addEventListener('click', (e)=>{
     const newName = prompt('Rename this line:', line.name);
     if(newName && newName.trim()){ line.name = newName.trim(); saveRepertoire(); renderRepTree(); }
   } else if(deleteId){
-    if(!confirm('Delete this line from your repertoire?')) return;
-    state.repertoire[state.repColor] = state.repertoire[state.repColor].filter(l=>l.id!==deleteId);
+    // Cascade: deleting a heading removes everything nested under it too, since a sub-variation
+    // without its parent line no longer means anything.
+    const lines = state.repertoire[state.repColor];
+    const idsToDelete = new Set([deleteId]);
+    let grew = true;
+    while(grew){
+      grew = false;
+      for(const l of lines){
+        if(l.parentId && idsToDelete.has(l.parentId) && !idsToDelete.has(l.id)){ idsToDelete.add(l.id); grew = true; }
+      }
+    }
+    const msg = idsToDelete.size > 1 ? `Delete this line and its ${idsToDelete.size-1} sub-variation(s)?` : 'Delete this line from your repertoire?';
+    if(!confirm(msg)) return;
+    state.repertoire[state.repColor] = lines.filter(l=>!idsToDelete.has(l.id));
     saveRepertoire();
     renderRepTree();
   }
@@ -1770,7 +1828,8 @@ function checkDeviation(){
       const defaultName = g?.opening?.name || `vs ${state.userColor==='white' ? (g?.players?.black?.user?.name||'opponent') : (g?.players?.white?.user?.name||'opponent')}`;
       const name = prompt('Name this line for your library:', defaultName);
       if(name === null) return; // cancelled
-      addRepertoireLine(state.userColor, name.trim() || defaultName, g?.opening?.eco || null, state.sanMoves.slice(0, deviationPly));
+      const parentId = (node.__lines && node.__lines[0]) ? node.__lines[0].id : null; // nest under the line you deviated from, if any
+      addRepertoireLine(state.userColor, name.trim() || defaultName, g?.opening?.eco || null, state.sanMoves.slice(0, deviationPly), parentId);
       banner.classList.add('hidden');
       alert('Added to your repertoire.');
     };
