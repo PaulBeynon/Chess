@@ -122,20 +122,18 @@
     border-radius:5px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
   }
   .deviation-banner p{ margin:0; font-size:13px; }
-  .rep-card{ background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:10px; }
-  .rep-card .rep-name{ font-weight:600; font-size:14px; }
-  .rep-card .rep-eco{ font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--text-dim); margin-left:6px; }
-  .rep-card .rep-moves{ font-family:'IBM Plex Mono', monospace; font-size:12px; color:var(--text-dim); margin-top:5px; line-height:1.5; word-break:break-word; }
-  .rep-card .rep-actions{ margin-top:8px; display:flex; gap:8px; }
-  .rep-card .rep-actions button{ font-size:11px; padding:4px 9px; }
-  .rep-node{ margin-bottom:6px; }
-  .rep-node > summary{ cursor:pointer; list-style:none; padding:8px 10px; border-radius:6px; background:var(--panel-2); border:1px solid var(--line); display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
-  .rep-node > summary::-webkit-details-marker{ display:none; }
-  .rep-node > summary::before{ content:'▸'; color:var(--brass); font-size:11px; margin-right:2px; }
-  .rep-node[open] > summary::before{ content:'▾'; }
-  .rep-node .rep-children{ margin-left:20px; padding-left:12px; border-left:1px dashed var(--line); margin-top:8px; }
-  .rep-node .rep-actions{ margin:8px 0 4px 0; display:flex; gap:8px; }
-  .rep-node .rep-actions button{ font-size:11px; padding:4px 9px; }
+  .rep-row{ display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:5px; }
+  .rep-row:hover{ background:var(--panel-2); }
+  .rep-toggle{ flex:none; width:20px; height:20px; border-radius:4px; border:1px solid var(--line); background:var(--panel-2); color:var(--brass); font-family:'IBM Plex Mono', monospace; font-size:12px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+  .rep-toggle.spacer{ visibility:hidden; }
+  .rep-name{ font-weight:600; font-size:13px; }
+  .rep-eco{ font-family:'IBM Plex Mono', monospace; font-size:10px; color:var(--text-dim); }
+  .rep-preview{ font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--text-dim); opacity:0.75; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+  .rep-row-actions{ flex:none; display:flex; gap:4px; margin-left:auto; }
+  .rep-row-actions button{ font-size:10px; padding:2px 6px; opacity:0.6; }
+  .rep-row-actions button:hover{ opacity:1; }
+  .rep-children{ margin-left:14px; padding-left:12px; border-left:1px dashed var(--line); display:none; }
+  .rep-children.expanded{ display:block; }
   .small{ font-size:12px; color:var(--text-dim); }
   .flex-between{ display:flex; justify-content:space-between; align-items:center; }
   .pill{ font-family:'IBM Plex Mono'; font-size:11px; padding:3px 9px; border-radius:20px; border:1px solid var(--line); color:var(--text-dim); cursor:pointer;}
@@ -361,8 +359,6 @@
         <textarea id="pgnImport" placeholder="1. e4 c5 2. Nf3 d6 3. d4 cxd4 ..."></textarea>
         <label for="pgnImportName" style="margin-top:8px;">Name this line</label>
         <input type="text" id="pgnImportName" placeholder="e.g. Sicilian: Najdorf" style="width:100%;">
-        <label for="pgnImportParent" style="margin-top:8px;">Parent (leave as top-level for a main opening)</label>
-        <select id="pgnImportParent" style="width:100%;"></select>
         <div class="row" style="margin-top:8px;">
           <button class="btn" id="importPgnBtn">Add to library</button>
           <button class="btn ghost" id="clearRepBtn">Clear this repertoire</button>
@@ -1605,15 +1601,33 @@ function setRepColor(c){
 function saveRepertoire(){
   localStorage.setItem('ledger_repertoire', JSON.stringify(state.repertoire));
 }
-// Adds one named line to the library. parentId nests it as a sub-variation under an existing
-// line (e.g. "Vienna Gambit" -> "Steinitz Gambit" -> a further sub-line), or null for a new
-// main-opening heading. If an identical line (same colour, same move sequence) already exists,
-// does nothing — avoids piling up duplicates from repeated "add to repertoire" clicks.
-function addRepertoireLine(color, name, eco, moves, parentId){
+// Adds one named line to the library, automatically working out where it belongs in the
+// hierarchy: it nests under the existing line whose moves are the longest matching prefix of
+// this line's moves (or becomes a new top-level opening if nothing matches). It also re-parents
+// any existing lines that this new line turns out to be a closer-fitting ancestor for — so
+// importing "Vienna Gambit" after already having "Vienna Gambit: Steinitz Gambit" on its own
+// slots the existing line in underneath it. If an identical line (same colour, same move
+// sequence) already exists, does nothing.
+function addRepertoireLine(color, name, eco, moves){
   const lines = state.repertoire[color];
   const movesKey = moves.join('|');
   if(lines.some(l => l.moves.join('|') === movesKey)) return null;
-  const line = { id: 'line_' + Date.now() + '_' + Math.floor(Math.random()*1000), name: name || 'Untitled line', eco: eco || null, moves: moves.slice(), parentId: parentId || null };
+  const isPrefix = (shorter, longer)=> shorter.length < longer.length && shorter.every((san,i)=> longer[i]===san);
+  const line = { id: 'line_' + Date.now() + '_' + Math.floor(Math.random()*1000), name: name || 'Untitled line', eco: eco || null, moves: moves.slice(), parentId: null };
+
+  let bestParent = null;
+  for(const l of lines){
+    if(isPrefix(l.moves, line.moves) && (!bestParent || l.moves.length > bestParent.moves.length)) bestParent = l;
+  }
+  line.parentId = bestParent ? bestParent.id : null;
+
+  for(const l of lines){
+    if(!isPrefix(line.moves, l.moves)) continue;
+    const currentParent = lines.find(x=>x.id===l.parentId);
+    const currentParentLen = currentParent ? currentParent.moves.length : -1;
+    if(line.moves.length > currentParentLen) l.parentId = line.id;
+  }
+
   lines.push(line);
   saveRepertoire();
   return line;
@@ -1636,24 +1650,14 @@ function buildTreeFromLines(lines){
 function childMoves(node){
   return Object.keys(node).filter(k => k !== '__lines');
 }
-function populateParentPicker(){
-  const sel = document.getElementById('pgnImportParent');
-  const lines = state.repertoire[state.repColor];
-  const byId = new Map(lines.map(l=>[l.id, l]));
-  const depthOf = (l)=>{ let d=0, cur=l; while(cur.parentId && byId.has(cur.parentId)){ cur = byId.get(cur.parentId); d++; if(d>20) break; } return d; };
-  const sorted = [...lines].sort((a,b)=> depthOf(a)-depthOf(b));
-  sel.innerHTML = '<option value="">— New top-level opening —</option>' +
-    sorted.map(l=> `<option value="${l.id}">${'— '.repeat(depthOf(l))}${l.name}</option>`).join('');
-}
 document.getElementById('importPgnBtn').addEventListener('click', ()=>{
   const text = document.getElementById('pgnImport').value;
   const name = document.getElementById('pgnImportName').value.trim();
-  const parentId = document.getElementById('pgnImportParent').value || null;
   const sanMoves = parseMovesString(text);
   const {sanClean} = buildPositions(sanMoves);
   if(sanClean.length === 0){ alert('Could not parse any moves from that PGN.'); return; }
   if(!name){ alert('Give this line a name first — that\'s what turns your repertoire into a browsable library.'); return; }
-  addRepertoireLine(state.repColor, name, null, sanClean, parentId);
+  addRepertoireLine(state.repColor, name, null, sanClean);
   renderRepTree();
   document.getElementById('pgnImport').value = '';
   document.getElementById('pgnImportName').value = '';
@@ -1669,7 +1673,6 @@ document.getElementById('clearRepBtn').addEventListener('click', ()=>{
 function renderRepTree(){
   const container = document.getElementById('repLibrary');
   const lines = state.repertoire[state.repColor];
-  populateParentPicker();
   if(lines.length === 0){
     container.innerHTML = '<div class="empty">No lines yet. Import a PGN, or add deviations from the Analysis tab.</div>';
     return;
@@ -1690,18 +1693,24 @@ function renderRepTree(){
     }).join(' ');
     const eco = line.eco ? `<span class="rep-eco">${line.eco}</span>` : '';
     const children = byParent.get(line.id) || [];
-    const childrenHtml = children.length ? `<div class="rep-children">${children.map(renderNode).join('')}</div>` : '';
-    return `<details class="rep-node" open>
-      <summary>
+    const toggleBtn = children.length
+      ? `<button class="rep-toggle" data-toggle="${line.id}">+</button>`
+      : `<span class="rep-toggle spacer">+</span>`;
+    const childrenHtml = children.length
+      ? `<div class="rep-children" id="rep-children-${line.id}">${children.map(renderNode).join('')}</div>`
+      : '';
+    return `<div>
+      <div class="rep-row">
+        ${toggleBtn}
         <span class="rep-name">${line.name}</span>${eco}
-      </summary>
-      <div class="rep-moves">${preview}</div>
-      <div class="rep-actions">
-        <button class="btn ghost" data-rename="${line.id}">Rename</button>
-        <button class="btn ghost" data-delete="${line.id}">Delete</button>
+        <span class="rep-preview">${preview}</span>
+        <span class="rep-row-actions">
+          <button class="btn ghost" data-rename="${line.id}">✎</button>
+          <button class="btn ghost" data-delete="${line.id}">✕</button>
+        </span>
       </div>
       ${childrenHtml}
-    </details>`;
+    </div>`;
   };
   const topLevel = byParent.get('__root') || [];
   container.innerHTML = topLevel.length
@@ -1709,8 +1718,16 @@ function renderRepTree(){
     : '<div class="empty">No top-level openings yet — everything currently in this library is nested under a missing parent.</div>';
 }
 document.getElementById('repLibrary').addEventListener('click', (e)=>{
+  const toggleId = e.target.dataset.toggle;
   const renameId = e.target.dataset.rename;
   const deleteId = e.target.dataset.delete;
+  if(toggleId){
+    const childrenEl = document.getElementById('rep-children-' + toggleId);
+    if(!childrenEl) return;
+    const expanded = childrenEl.classList.toggle('expanded');
+    e.target.textContent = expanded ? '−' : '+';
+    return;
+  }
   if(renameId){
     const line = state.repertoire[state.repColor].find(l=>l.id===renameId);
     if(!line) return;
@@ -1828,8 +1845,7 @@ function checkDeviation(){
       const defaultName = g?.opening?.name || `vs ${state.userColor==='white' ? (g?.players?.black?.user?.name||'opponent') : (g?.players?.white?.user?.name||'opponent')}`;
       const name = prompt('Name this line for your library:', defaultName);
       if(name === null) return; // cancelled
-      const parentId = (node.__lines && node.__lines[0]) ? node.__lines[0].id : null; // nest under the line you deviated from, if any
-      addRepertoireLine(state.userColor, name.trim() || defaultName, g?.opening?.eco || null, state.sanMoves.slice(0, deviationPly), parentId);
+      addRepertoireLine(state.userColor, name.trim() || defaultName, g?.opening?.eco || null, state.sanMoves.slice(0, deviationPly));
       banner.classList.add('hidden');
       alert('Added to your repertoire.');
     };
