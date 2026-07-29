@@ -341,6 +341,10 @@
       <h3 style="margin-bottom:6px; font-size:16px;">Last 25 games</h3>
       <p class="small" id="lifetimeCaption" style="margin-bottom:14px;"></p>
       <div id="lifetimeCards" class="row"></div>
+
+      <h3 style="margin-bottom:6px; font-size:16px; margin-top:22px;">Lifetime</h3>
+      <p class="small" id="lifetimeAllCaption" style="margin-bottom:14px;"></p>
+      <div id="lifetimeAllCards" class="row"></div>
     </div>
     <div id="breakdownEmpty" class="empty">Auto-analyse some games from the Games tab first — this fills in once you have analysed games.</div>
     <div id="breakdownBody" class="hidden">
@@ -1735,6 +1739,10 @@ function scoreLine(games){
   const scorePct = games.length ? 100*(wins+draws/2)/games.length : 0;
   return {wins, draws, losses, games: games.length, scorePct};
 }
+function winLossRatio(o){
+  if(o.losses === 0) return o.wins > 0 ? `${o.wins}:0` : '—';
+  return `${(o.wins/o.losses).toFixed(2)}:1`;
+}
 async function renderLifetime(){
   const section = document.getElementById('lifetimeSection');
   const all = await idbGetAll('lifetimeGames');
@@ -1754,10 +1762,29 @@ async function renderLifetime(){
 
   const cards = [
     {value: `${overall.scorePct.toFixed(1)}%`, label: `Overall score · ${overall.wins}-${overall.losses}-${overall.draws}`},
+    {value: winLossRatio(overall), label: 'Win:Loss ratio'},
     {value: `${white.scorePct.toFixed(1)}%`, label: `White score · ${white.wins}-${white.losses}-${white.draws} (${white.games})`},
     {value: `${black.scorePct.toFixed(1)}%`, label: `Black score · ${black.wins}-${black.losses}-${black.draws} (${black.games})`},
   ];
   document.getElementById('lifetimeCards').innerHTML = cards.map(c=>
+    `<div class="stat-card"><div class="value">${c.value}</div><div class="label">${c.label}</div></div>`
+  ).join('');
+
+  // Lifetime (every downloaded game, not just the most recent 25)
+  const lifeOverall = scoreLine(all);
+  const lifeWhite = scoreLine(all.filter(g=>g.isUserWhite));
+  const lifeBlack = scoreLine(all.filter(g=>!g.isUserWhite));
+  const lifeOldest = new Date(all[all.length-1].createdAt).toLocaleDateString(undefined,{year:'numeric', month:'short', day:'numeric'});
+  const lifeNewest = new Date(all[0].createdAt).toLocaleDateString(undefined,{year:'numeric', month:'short', day:'numeric'});
+  document.getElementById('lifetimeAllCaption').textContent = `All ${all.length} games in your downloaded career history, from ${lifeOldest} to ${lifeNewest}.`;
+
+  const lifeCards = [
+    {value: `${lifeOverall.scorePct.toFixed(1)}%`, label: `Overall score · ${lifeOverall.wins}-${lifeOverall.losses}-${lifeOverall.draws}`},
+    {value: winLossRatio(lifeOverall), label: 'Win:Loss ratio'},
+    {value: `${lifeWhite.scorePct.toFixed(1)}%`, label: `White score · ${lifeWhite.wins}-${lifeWhite.losses}-${lifeWhite.draws} (${lifeWhite.games})`},
+    {value: `${lifeBlack.scorePct.toFixed(1)}%`, label: `Black score · ${lifeBlack.wins}-${lifeBlack.losses}-${lifeBlack.draws} (${lifeBlack.games})`},
+  ];
+  document.getElementById('lifetimeAllCards').innerHTML = lifeCards.map(c=>
     `<div class="stat-card"><div class="value">${c.value}</div><div class="label">${c.label}</div></div>`
   ).join('');
 }
