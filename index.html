@@ -135,6 +135,21 @@
   .rep-row-actions button:hover{ opacity:1; }
   .rep-children{ margin-left:14px; padding-left:12px; border-left:1px dashed var(--line); display:none; }
   .rep-children.expanded{ display:block; }
+
+  .ob-section-heading{ font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-dim); margin:18px 0 6px; }
+  .ob-row{ display:flex; align-items:center; gap:10px; padding:8px 6px; border-radius:5px; }
+  .ob-row:hover{ background:var(--panel-2); }
+  .ob-toggle{ flex:none; width:20px; height:20px; border-radius:4px; border:1px solid var(--line); background:var(--panel-2); color:var(--brass); font-family:'IBM Plex Mono', monospace; font-size:12px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+  .ob-toggle.spacer{ visibility:hidden; }
+  .ob-main{ flex:1; min-width:0; }
+  .ob-name{ font-family:'IBM Plex Mono', monospace; font-size:13px; }
+  .ob-eco{ font-size:11px; color:var(--text-dim); opacity:0.75; margin-left:6px; }
+  .ob-meta{ font-size:11px; color:var(--text-dim); margin-top:2px; }
+  .ob-bar-track{ height:6px; border-radius:3px; background:rgba(255,255,255,0.08); margin-top:6px; max-width:280px; overflow:hidden; }
+  .ob-bar-fill{ height:100%; }
+  .ob-score{ flex:none; font-size:12px; opacity:0.85; white-space:nowrap; }
+  .ob-children{ margin-left:16px; padding-left:12px; border-left:1px dashed var(--line); display:none; }
+  .ob-children.expanded{ display:block; }
   .small{ font-size:12px; color:var(--text-dim); }
   .flex-between{ display:flex; justify-content:space-between; align-items:center; }
   .pill{ font-family:'IBM Plex Mono'; font-size:11px; padding:3px 9px; border-radius:20px; border:1px solid var(--line); color:var(--text-dim); cursor:pointer;}
@@ -1821,60 +1836,111 @@ async function renderLifetime(){
   renderOpeningBreakdown(all);
 }
 
-// ---- Performance by opening: full career-history breakdown, not just analysed games ----
+// ---- Performance by opening: cascading tree built from the career-history opening names ----
+// Lichess opening names follow "Main Line: Variation, Sub-variation, Sub-sub-variation" — splitting
+// on ':' then ',' gives a natural hierarchy (e.g. "Sicilian Defense" -> "Dragon Variation" -> "Yugoslav Attack").
+const OB_MIN_GAMES = 2;
+
+function splitOpeningPath(name){
+  const colonIdx = name.indexOf(':');
+  if(colonIdx === -1) return [name.trim()];
+  const main = name.slice(0, colonIdx).trim();
+  const rest = name.slice(colonIdx + 1).trim();
+  const parts = rest.split(',').map(s => s.trim()).filter(Boolean);
+  return [main, ...parts];
+}
+
+function buildOpeningTree(records){
+  const root = { children: new Map() };
+  let idCounter = 0;
+  for(const g of records){
+    const segments = splitOpeningPath(g.openingName || 'Unknown opening');
+    let node = root;
+    for(const seg of segments){
+      if(!node.children.has(seg)){
+        node.children.set(seg, {
+          id: 'ob-' + (idCounter++), name: seg, children: new Map(),
+          games: 0, wins: 0, draws: 0, losses: 0, ecoSet: new Set()
+        });
+      }
+      node = node.children.get(seg);
+      node.games++;
+      if(g.result === 'win') node.wins++;
+      else if(g.result === 'draw') node.draws++;
+      else node.losses++;
+      if(g.eco) node.ecoSet.add(g.eco);
+    }
+  }
+  return root;
+}
+
+function buildOpeningTopLevel(records){
+  if(records.length === 0) return [];
+  const root = buildOpeningTree(records);
+  return [...root.children.values()].filter(c => c.games >= OB_MIN_GAMES).sort((a, b) => b.games - a.games);
+}
+
+function renderOpeningNode(node){
+  const scorePct = 100 * (node.wins + node.draws / 2) / node.games;
+  const barColor = scorePct >= 60 ? 'var(--good)' : scorePct >= 45 ? 'var(--brass)' : 'var(--bad)';
+  const ecoArr = [...node.ecoSet].sort();
+  const ecoLabel = ecoArr.length === 0 ? '' : ecoArr.length === 1 ? ecoArr[0] : `${ecoArr[0]}–${ecoArr[ecoArr.length - 1]}`;
+  const childrenArr = [...node.children.values()].filter(c => c.games >= OB_MIN_GAMES).sort((a, b) => b.games - a.games);
+  const hasChildren = childrenArr.length > 0;
+  const toggleBtn = hasChildren
+    ? `<button class="ob-toggle" data-toggle="${node.id}">+</button>`
+    : `<span class="ob-toggle spacer">+</span>`;
+  const childrenHtml = hasChildren
+    ? `<div class="ob-children" id="ob-children-${node.id}">${childrenArr.map(renderOpeningNode).join('')}</div>`
+    : '';
+  return `<div>
+    <div class="ob-row">
+      ${toggleBtn}
+      <div class="ob-main">
+        <span class="ob-name">${node.name}</span>${ecoLabel ? `<span class="ob-eco">(${ecoLabel})</span>` : ''}
+        <div class="ob-meta">${node.wins}-${node.losses}-${node.draws} in ${node.games} games</div>
+        <div class="ob-bar-track"><div class="ob-bar-fill" style="width:${scorePct}%; background:${barColor};"></div></div>
+      </div>
+      <span class="ob-score">${scorePct.toFixed(1)}%</span>
+    </div>
+    ${childrenHtml}
+  </div>`;
+}
+
 function renderOpeningBreakdown(all){
   const el = document.getElementById('openingBreakdown');
   const captionEl = document.getElementById('openingBreakdownCaption');
   if(!el) return;
-  const MIN_GAMES = 2;
   const filterSel = document.getElementById('openingBreakdownFilter');
   const colorFilter = filterSel ? filterSel.value : 'all';
 
-  const rows = new Map();
-  for(const g of all){
-    const color = g.isUserWhite ? 'white' : 'black';
-    if(colorFilter !== 'all' && colorFilter !== color) continue;
-    const eco = g.eco || '???';
-    const name = g.openingName || 'Unknown opening';
-    const key = colorFilter === 'all' ? `${color}|${eco}` : eco;
-    if(!rows.has(key)) rows.set(key, {eco, name, color, games:0, wins:0, draws:0, losses:0});
-    const r = rows.get(key);
-    r.games++;
-    if(g.result === 'win') r.wins++;
-    else if(g.result === 'draw') r.draws++;
-    else r.losses++;
+  captionEl.textContent = `From your downloaded career history — tap an opening to expand into its variations (branches played at least ${OB_MIN_GAMES} times).`;
+
+  const section = (records, heading) => {
+    const topLevel = buildOpeningTopLevel(records);
+    if(topLevel.length === 0) return '';
+    return `<h4 class="ob-section-heading">${heading}</h4>${topLevel.map(renderOpeningNode).join('')}`;
+  };
+
+  let html = '';
+  if(colorFilter === 'all'){
+    html += section(all.filter(g => g.isUserWhite), 'As White');
+    html += section(all.filter(g => !g.isUserWhite), 'As Black');
+  } else {
+    const recs = all.filter(g => (colorFilter === 'white') === g.isUserWhite);
+    html += section(recs, colorFilter === 'white' ? 'As White' : 'As Black');
   }
 
-  const list = [...rows.values()]
-    .filter(r => r.games >= MIN_GAMES)
-    .map(r => ({...r, scorePct: 100 * (r.wins + r.draws / 2) / r.games}))
-    .sort((a, b) => b.games - a.games)
-    .slice(0, 25);
-
-  captionEl.textContent = `Openings played at least ${MIN_GAMES} times, from your downloaded career history — sorted by how often you play them.`;
-
-  if(list.length === 0){
-    el.innerHTML = `<div class="empty">Not enough games yet for this filter — download more career history, or try "Both colours".</div>`;
-    return;
-  }
-
-  el.innerHTML = list.map(r => {
-    const barColor = r.scorePct >= 60 ? 'var(--good)' : r.scorePct >= 45 ? 'var(--brass)' : 'var(--bad)';
-    const colorBadgeStyle = r.color === 'white' ? 'background:rgba(233,229,217,0.15); color:var(--text);' : 'background:rgba(0,0,0,0.25); color:var(--text-dim);';
-    return `<div class="blunder-item">
-      <div style="flex:1;">
-        <div class="move-info">${r.name} <span class="small" style="opacity:0.65;">(${r.eco})</span></div>
-        <div class="move-meta">
-          ${colorFilter === 'all' ? `<span class="badge" style="${colorBadgeStyle}">${r.color[0].toUpperCase() + r.color.slice(1)}</span> ` : ''}${r.wins}-${r.losses}-${r.draws} in ${r.games} games
-        </div>
-        <div style="height:6px; border-radius:3px; background:rgba(255,255,255,0.08); margin-top:7px; overflow:hidden; max-width:280px;">
-          <div style="height:100%; width:${r.scorePct}%; background:${barColor};"></div>
-        </div>
-      </div>
-      <span class="small" style="margin-left:12px; opacity:0.85; white-space:nowrap;">${r.scorePct.toFixed(1)}%</span>
-    </div>`;
-  }).join('');
+  el.innerHTML = html || `<div class="empty">Not enough games yet for this filter — download more career history, or try a different colour.</div>`;
 }
+document.getElementById('openingBreakdown').addEventListener('click', (e)=>{
+  const toggleId = e.target.dataset.toggle;
+  if(!toggleId) return;
+  const childrenEl = document.getElementById('ob-children-' + toggleId);
+  if(!childrenEl) return;
+  const expanded = childrenEl.classList.toggle('expanded');
+  e.target.textContent = expanded ? '−' : '+';
+});
 
 function renderBreakdown(){
   const all = Object.values(state.autoAnalysis).filter(a => a.done)
