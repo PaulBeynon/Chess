@@ -145,6 +145,11 @@
   #loginGate h1{ font-size:32px; margin-bottom:6px; }
   #loginGate .btn{ width:100%; padding:12px; font-size:15px; }
   .empty{ color:var(--text-dim); font-size:13px; padding:30px 0; text-align:center; }
+  #importDetails{ background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
+  #importDetails summary{ cursor:pointer; font-family:'Fraunces', serif; font-weight:600; font-size:15px; color:var(--parchment); list-style:none; display:flex; align-items:center; }
+  #importDetails summary::-webkit-details-marker{ display:none; }
+  #importDetails summary::before{ content:'▸'; display:inline-block; margin-right:8px; color:var(--brass); transition:transform 0.15s ease; }
+  #importDetails[open] summary::before{ transform:rotate(90deg); }
   a{ color:var(--brass); }
 
   @media (max-width: 680px){
@@ -231,106 +236,112 @@
 
   <nav class="tabs">
     <button class="tab-btn active" data-tab="games">Games</button>
-    <button class="tab-btn" data-tab="analysis">Analysis</button>
     <button class="tab-btn" data-tab="breakdown">Breakdown</button>
     <button class="tab-btn" data-tab="repertoire">Repertoire</button>
   </nav>
 
   <!-- GAMES TAB -->
   <section id="tab-games" class="panel">
-    <div class="row" style="align-items:flex-end;">
-      <div>
-        <label for="lichessUser">Lichess username</label>
-        <input type="text" id="lichessUser" placeholder="e.g. DrNykterstein">
-      </div>
-      <div>
-        <label for="maxGames">Games to fetch</label>
-        <input type="text" id="maxGames" value="20" style="width:70px;">
-      </div>
-      <button class="btn" id="fetchGamesBtn">Fetch games</button>
-      <span class="small" id="fetchStatus"></span>
-    </div>
-    <div class="row" style="margin-top:12px; align-items:center;">
-      <span class="small" style="text-transform:uppercase; letter-spacing:0.08em;">Time control:</span>
-      <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="bullet"> Bullet</label>
-      <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="blitz"> Blitz</label>
-      <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="rapid"> Rapid</label>
-      <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="classical"> Classical</label>
-      <span class="small">(none checked = all)</span>
-    </div>
-    <div class="row" style="margin-top:12px; align-items:center;">
-      <label style="display:flex; align-items:center; gap:6px; text-transform:none; letter-spacing:normal; margin:0;">
-        <input type="checkbox" id="autoAnalyseToggle" checked>
-        Auto-analyse after import
-      </label>
-      <select id="autoAnalyseLimit">
-        <option value="5">First 5 games</option>
-        <option value="10" selected>First 10 games</option>
-        <option value="20">First 20 games</option>
-      </select>
-      <span class="small" id="autoAnalyseStatus"></span>
-    </div>
-    <div class="row" style="margin-top:12px; align-items:center;">
-      <button class="btn ghost" id="downloadHistoryBtn">Download full career history</button>
-      <span class="small" id="historyStatus"></span>
-    </div>
-    <p class="small" style="margin-top:6px; opacity:0.7;" id="historyLastSynced"></p>
-    <p class="small" style="margin-top:2px; opacity:0.65; max-width:640px;">
-      "Fetch games" above pulls your most recent games with full move data for engine-based analysis on the Analysis tab.
-      "Download full career history" is separate — it stores a lightweight record (result, rating, opening) of every game you've
-      ever played, with no move data or engine analysis, purely to power the lifetime stats on the Breakdown tab.
-    </p>
-    <div class="gamelist" id="gameList"></div>
-  </section>
-
-  <!-- ANALYSIS TAB -->
-  <section id="tab-analysis" class="panel hidden">
-    <div class="row" style="margin-bottom:14px; align-items:center;">
-      <div style="flex:1; min-width:180px;">
-        <label for="analysisGamePicker">Jump to a loaded game</label>
-        <select id="analysisGamePicker" style="width:100%;">
-          <option value="">Fetch games to pick one…</option>
-        </select>
-      </div>
-    </div>
-    <div id="analysisEmpty" class="empty">No game selected yet — pick one above, or from the Games tab.</div>
-    <div id="analysisBody" class="hidden">
-      <div class="flex-between" style="margin-bottom:10px; flex-wrap:wrap; gap:8px;">
-        <div class="small" id="gameTitle"></div>
-        <div class="row" id="analysisControlsRow" style="gap:8px;">
-          <select id="analysisSpeed">
-            <option value="150">Quick</option>
-            <option value="400" selected>Standard</option>
-            <option value="1000">Deep</option>
+    <details id="importDetails" open>
+      <summary>Import &amp; sync</summary>
+      <div style="margin-top:16px;">
+        <div class="row" style="align-items:flex-end;">
+          <div>
+            <label for="lichessUser">Lichess username</label>
+            <input type="text" id="lichessUser" placeholder="e.g. DrNykterstein">
+          </div>
+          <div>
+            <label for="maxGames">Games to fetch</label>
+            <input type="text" id="maxGames" value="20" style="width:70px;">
+          </div>
+          <button class="btn" id="fetchGamesBtn">Fetch games</button>
+          <span class="small" id="fetchStatus"></span>
+        </div>
+        <div class="row" style="margin-top:12px; align-items:center;">
+          <span class="small" style="text-transform:uppercase; letter-spacing:0.08em;">Time control:</span>
+          <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="bullet"> Bullet</label>
+          <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="blitz"> Blitz</label>
+          <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="rapid"> Rapid</label>
+          <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="classical"> Classical</label>
+          <span class="small">(none checked = all)</span>
+        </div>
+        <div class="row" style="margin-top:12px; align-items:center;">
+          <label style="display:flex; align-items:center; gap:6px; text-transform:none; letter-spacing:normal; margin:0;">
+            <input type="checkbox" id="autoAnalyseToggle" checked>
+            Auto-analyse after import
+          </label>
+          <select id="autoAnalyseLimit">
+            <option value="5">First 5 games</option>
+            <option value="10" selected>First 10 games</option>
+            <option value="20">First 20 games</option>
           </select>
-          <button class="btn ghost" id="runFullAnalysis">Analyse full game</button>
+          <span class="small" id="autoAnalyseStatus"></span>
+        </div>
+        <p class="small" style="margin-top:14px; margin-bottom:4px; opacity:0.7; text-transform:uppercase; letter-spacing:0.06em;">Separately — for lifetime stats</p>
+        <div class="row" style="align-items:center;">
+          <button class="btn ghost" id="downloadHistoryBtn">Download full career history</button>
+          <span class="small" id="historyStatus"></span>
+        </div>
+        <p class="small" style="margin-top:6px; opacity:0.7;" id="historyLastSynced"></p>
+        <p class="small" style="margin-top:2px; opacity:0.65; max-width:640px;">
+          This pulls a lightweight record (result, rating, opening — no moves) of every game you've ever played, to power the
+          career-wide stats on the Breakdown tab. It's separate from "Fetch games" above, which pulls full move data for the
+          board analysis below.
+        </p>
+      </div>
+    </details>
+
+    <div class="gamelist" id="gameList" style="margin-top:20px;"></div>
+
+    <div id="analysisArea" style="margin-top:28px; padding-top:22px; border-top:1px solid var(--line);">
+      <h3 style="margin-bottom:14px; font-size:16px;">Analysis</h3>
+      <div class="row" style="margin-bottom:14px; align-items:center;">
+        <div style="flex:1; min-width:180px;">
+          <label for="analysisGamePicker">Jump to a loaded game</label>
+          <select id="analysisGamePicker" style="width:100%;">
+            <option value="">Fetch games to pick one…</option>
+          </select>
         </div>
       </div>
-      <div class="analysis-layout">
-        <div class="board-col">
-          <div class="evalbar"><div class="fill" id="evalFill" style="height:50%;"></div><span class="evalbar-label" id="evalBarLabel"></span></div>
-          <div class="board-frame" id="boardFrame">
-            <div class="board" id="board"></div>
+      <div id="analysisEmpty" class="empty">No game selected yet — pick one above, or tap a game in the list.</div>
+      <div id="analysisBody" class="hidden">
+        <div class="flex-between" style="margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+          <div class="small" id="gameTitle"></div>
+          <div class="row" id="analysisControlsRow" style="gap:8px;">
+            <select id="analysisSpeed">
+              <option value="150">Quick</option>
+              <option value="400" selected>Standard</option>
+              <option value="1000">Deep</option>
+            </select>
+            <button class="btn ghost" id="runFullAnalysis">Analyse full game</button>
           </div>
         </div>
-        <div class="controls">
-          <button class="icon" id="btnStart">⏮</button>
-          <button class="icon" id="btnPrev">◀</button>
-          <button class="icon" id="btnEnd">⏭</button>
-          <button class="icon play-btn" id="btnNextBig" style="margin-left:auto;">▶</button>
-          <span class="small" id="evalReadout" style="align-self:center; margin-left:8px;"></span>
+        <div class="analysis-layout">
+          <div class="board-col">
+            <div class="evalbar"><div class="fill" id="evalFill" style="height:50%;"></div><span class="evalbar-label" id="evalBarLabel"></span></div>
+            <div class="board-frame" id="boardFrame">
+              <div class="board" id="board"></div>
+            </div>
+          </div>
+          <div class="controls">
+            <button class="icon" id="btnStart">⏮</button>
+            <button class="icon" id="btnPrev">◀</button>
+            <button class="icon" id="btnEnd">⏭</button>
+            <button class="icon play-btn" id="btnNextBig" style="margin-left:auto;">▶</button>
+            <span class="small" id="evalReadout" style="align-self:center; margin-left:8px;"></span>
+          </div>
+          <div class="move-table-wrap" id="movePanelWrap">
+            <div class="move-table" id="movePanel"></div>
+          </div>
         </div>
-        <div class="move-table-wrap" id="movePanelWrap">
-          <div class="move-table" id="movePanel"></div>
+        <div class="deviation-banner hidden" id="deviationBanner">
+          <p id="deviationText"></p>
+          <p class="small" id="deviationBookMoves" style="margin-top:-6px; opacity:0.8;"></p>
+          <button class="btn" id="addToRepertoireBtn">Add to my repertoire</button>
         </div>
-      </div>
-      <div class="deviation-banner hidden" id="deviationBanner">
-        <p id="deviationText"></p>
-        <p class="small" id="deviationBookMoves" style="margin-top:-6px; opacity:0.8;"></p>
-        <button class="btn" id="addToRepertoireBtn">Add to my repertoire</button>
-      </div>
-      <div class="deviation-banner hidden" id="inBookNoteBanner" style="border-color:var(--brass-dim);">
-        <p id="inBookNoteText" class="small"></p>
+        <div class="deviation-banner hidden" id="inBookNoteBanner" style="border-color:var(--brass-dim);">
+          <p id="inBookNoteText" class="small"></p>
+        </div>
       </div>
     </div>
   </section>
@@ -345,6 +356,17 @@
       <h3 style="margin-bottom:6px; font-size:16px; margin-top:22px;">Lifetime</h3>
       <p class="small" id="lifetimeAllCaption" style="margin-bottom:14px;"></p>
       <div id="lifetimeAllCards" class="row"></div>
+
+      <div class="flex-between" style="margin-top:26px; margin-bottom:6px; flex-wrap:wrap; gap:8px; align-items:center;">
+        <h3 style="font-size:16px;">Performance by opening</h3>
+        <select id="openingBreakdownFilter" style="width:auto;">
+          <option value="all">Both colours</option>
+          <option value="white">As White</option>
+          <option value="black">As Black</option>
+        </select>
+      </div>
+      <p class="small" id="openingBreakdownCaption" style="margin-bottom:14px;"></p>
+      <div id="openingBreakdown"></div>
     </div>
     <div id="breakdownEmpty" class="empty">Auto-analyse some games from the Games tab first — this fills in once you have analysed games.</div>
     <div id="breakdownBody" class="hidden">
@@ -783,6 +805,11 @@ document.getElementById('lichessUser').value = state.username;
 
 document.getElementById('fetchGamesBtn').addEventListener('click', fetchGames);
 
+document.getElementById('openingBreakdownFilter').addEventListener('change', async ()=>{
+  const all = await idbGetAll('lifetimeGames');
+  renderOpeningBreakdown(all);
+});
+
 async function fetchGames(){
   const username = document.getElementById('lichessUser').value.trim();
   const max = document.getElementById('maxGames').value.trim() || '20';
@@ -807,6 +834,8 @@ async function fetchGames(){
     }
     renderGameList();
     status.textContent = `${state.games.length} games loaded`;
+    const importDetails = document.getElementById('importDetails');
+    if(importDetails && state.games.length) importDetails.open = false;
     if(document.getElementById('autoAnalyseToggle').checked){
       runAutoAnalysis();
     }
@@ -1150,10 +1179,10 @@ function loadGameIntoAnalysis(g, isUserWhite){
   const picker = document.getElementById('analysisGamePicker');
   if(picker) picker.value = g.id;
 
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-  document.querySelector('.tab-btn[data-tab="analysis"]').classList.add('active');
-  document.querySelectorAll('section[id^="tab-"]').forEach(s=>s.classList.add('hidden'));
-  document.getElementById('tab-analysis').classList.remove('hidden');
+  const importDetails = document.getElementById('importDetails');
+  if(importDetails) importDetails.open = false;
+  const analysisArea = document.getElementById('analysisArea');
+  if(analysisArea) analysisArea.scrollIntoView({behavior:'smooth', block:'start'});
 
   renderMovePanel();
   renderBoard();
@@ -1787,6 +1816,63 @@ async function renderLifetime(){
   document.getElementById('lifetimeAllCards').innerHTML = lifeCards.map(c=>
     `<div class="stat-card"><div class="value">${c.value}</div><div class="label">${c.label}</div></div>`
   ).join('');
+
+  renderOpeningBreakdown(all);
+}
+
+// ---- Performance by opening: full career-history breakdown, not just analysed games ----
+function renderOpeningBreakdown(all){
+  const el = document.getElementById('openingBreakdown');
+  const captionEl = document.getElementById('openingBreakdownCaption');
+  if(!el) return;
+  const MIN_GAMES = 2;
+  const filterSel = document.getElementById('openingBreakdownFilter');
+  const colorFilter = filterSel ? filterSel.value : 'all';
+
+  const rows = new Map();
+  for(const g of all){
+    const color = g.isUserWhite ? 'white' : 'black';
+    if(colorFilter !== 'all' && colorFilter !== color) continue;
+    const eco = g.eco || '???';
+    const name = g.openingName || 'Unknown opening';
+    const key = colorFilter === 'all' ? `${color}|${eco}` : eco;
+    if(!rows.has(key)) rows.set(key, {eco, name, color, games:0, wins:0, draws:0, losses:0});
+    const r = rows.get(key);
+    r.games++;
+    if(g.result === 'win') r.wins++;
+    else if(g.result === 'draw') r.draws++;
+    else r.losses++;
+  }
+
+  const list = [...rows.values()]
+    .filter(r => r.games >= MIN_GAMES)
+    .map(r => ({...r, scorePct: 100 * (r.wins + r.draws / 2) / r.games}))
+    .sort((a, b) => b.games - a.games)
+    .slice(0, 25);
+
+  captionEl.textContent = `Openings played at least ${MIN_GAMES} times, from your downloaded career history — sorted by how often you play them.`;
+
+  if(list.length === 0){
+    el.innerHTML = `<div class="empty">Not enough games yet for this filter — download more career history, or try "Both colours".</div>`;
+    return;
+  }
+
+  el.innerHTML = list.map(r => {
+    const barColor = r.scorePct >= 60 ? 'var(--good)' : r.scorePct >= 45 ? 'var(--brass)' : 'var(--bad)';
+    const colorBadgeStyle = r.color === 'white' ? 'background:rgba(233,229,217,0.15); color:var(--text);' : 'background:rgba(0,0,0,0.25); color:var(--text-dim);';
+    return `<div class="blunder-item">
+      <div style="flex:1;">
+        <div class="move-info">${r.name} <span class="small" style="opacity:0.65;">(${r.eco})</span></div>
+        <div class="move-meta">
+          ${colorFilter === 'all' ? `<span class="badge" style="${colorBadgeStyle}">${r.color[0].toUpperCase() + r.color.slice(1)}</span> ` : ''}${r.wins}-${r.losses}-${r.draws} in ${r.games} games
+        </div>
+        <div style="height:6px; border-radius:3px; background:rgba(255,255,255,0.08); margin-top:7px; overflow:hidden; max-width:280px;">
+          <div style="height:100%; width:${r.scorePct}%; background:${barColor};"></div>
+        </div>
+      </div>
+      <span class="small" style="margin-left:12px; opacity:0.85; white-space:nowrap;">${r.scorePct.toFixed(1)}%</span>
+    </div>`;
+  }).join('');
 }
 
 function renderBreakdown(){
