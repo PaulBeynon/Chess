@@ -277,17 +277,7 @@
           </select>
           <span class="small" id="autoAnalyseStatus"></span>
         </div>
-        <p class="small" style="margin-top:14px; margin-bottom:4px; opacity:0.7; text-transform:uppercase; letter-spacing:0.06em;">Separately — for lifetime stats</p>
-        <div class="row" style="align-items:center;">
-          <button class="btn ghost" id="downloadHistoryBtn">Download full career history</button>
-          <span class="small" id="historyStatus"></span>
-        </div>
-        <p class="small" style="margin-top:6px; opacity:0.7;" id="historyLastSynced"></p>
-        <p class="small" style="margin-top:2px; opacity:0.65; max-width:640px;">
-          This pulls a lightweight record (result, rating, opening — no moves) of every game you've ever played, to power the
-          career-wide stats on the Breakdown tab. It's separate from "Fetch games" above, which pulls full move data for the
-          board analysis below.
-        </p>
+        <p class="small" style="margin-top:14px; opacity:0.65;" id="historyLastSynced"></p>
       </div>
     </details>
 
@@ -802,6 +792,11 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
 
 /* ---------------- LICHESS IMPORT ---------------- */
 document.getElementById('lichessUser').value = state.username;
+if(state.username) maybeAutoSyncHistory(state.username);
+document.getElementById('lichessUser').addEventListener('change', (e)=>{
+  const u = e.target.value.trim();
+  if(u) maybeAutoSyncHistory(u);
+});
 
 document.getElementById('fetchGamesBtn').addEventListener('click', fetchGames);
 
@@ -816,6 +811,7 @@ async function fetchGames(){
   if(!username){ alert('Enter a lichess username'); return; }
   state.username = username;
   localStorage.setItem('ledger_username', username);
+  maybeAutoSyncHistory(username);
   const status = document.getElementById('fetchStatus');
   status.textContent = 'fetching…';
   try{
@@ -845,21 +841,28 @@ async function fetchGames(){
   }
 }
 
-document.getElementById('downloadHistoryBtn').addEventListener('click', downloadFullHistory);
-async function downloadFullHistory(){
-  const username = document.getElementById('lichessUser').value.trim() || state.username;
-  if(!username){ alert('Enter a lichess username first'); return; }
+function maybeAutoSyncHistory(username){
+  if(!username) return;
+  const key = 'ledger_lifetime_last_sync_' + username.toLowerCase();
+  const last = localStorage.getItem(key);
+  const now = Date.now();
+  if(last && (now - Number(last)) < 12 * 60 * 60 * 1000) return; // already synced within last 12h
+  localStorage.setItem(key, String(now));
+  downloadFullHistory(username).catch(err => console.error('background career-history sync failed', err));
+}
+
+async function downloadFullHistory(usernameArg){
+  const username = usernameArg || document.getElementById('lichessUser').value.trim() || state.username;
+  if(!username) return;
   state.username = username;
   localStorage.setItem('ledger_username', username);
-  const statusEl = document.getElementById('historyStatus');
-  const btn = document.getElementById('downloadHistoryBtn');
-  btn.disabled = true;
+  const statusEl = document.getElementById('historyLastSynced');
   const PAGE_SIZE = 300; // Lichess's per-request cap for the games export endpoint
   let until = undefined;
   let totalStored = 0;
   try{
     while(true){
-      statusEl.textContent = `Downloading… ${totalStored} games so far`;
+      if(statusEl) statusEl.textContent = `Syncing career history in the background… ${totalStored} games so far`;
       const untilParam = until ? `&until=${until}` : '';
       const url = `https://lichess.org/api/games/user/${encodeURIComponent(username)}?max=${PAGE_SIZE}&opening=true&pgnInJson=false${untilParam}`;
       const res = await fetch(url, { headers: { 'Accept': 'application/x-ndjson' } });
@@ -890,13 +893,11 @@ async function downloadFullHistory(){
       if(records.length < PAGE_SIZE) break; // reached the end of history
       until = new Date(games[games.length - 1].createdAt).getTime() - 1;
     }
-    statusEl.textContent = `Done — ${totalStored} games stored for lifetime stats`;
   }catch(err){
     console.error(err);
-    statusEl.textContent = 'error: ' + err.message;
+    if(statusEl) statusEl.textContent = '';
   }finally{
-    btn.disabled = false;
-    if(document.getElementById('tab-breakdown').classList.contains('hidden') === false) renderLifetime();
+    if(document.getElementById('tab-breakdown') && !document.getElementById('tab-breakdown').classList.contains('hidden')) renderLifetime();
     updateHistoryLastSynced();
   }
 }
