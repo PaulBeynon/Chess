@@ -2001,10 +2001,11 @@ function loadOpeningReference(){
     try{ localStorage.setItem(cacheKey, JSON.stringify(map)); }catch(e){ /* over quota, still usable this session */ }
     return map;
   })();
+  openingRefPromise.catch(() => { openingRefPromise = null; }); // let a later click retry instead of staying broken all session
   return openingRefPromise;
 }
 
-let obBoardPositions = [];
+let obBoardPositions = [new Chess().fen()];
 let obBoardSanMoves = [];
 let obBoardPly = 0;
 
@@ -2016,15 +2017,26 @@ async function openOpeningBoard(node){
   document.getElementById('obBoardMoveLabel').textContent = '';
   panel.scrollIntoView({behavior:'smooth', block:'start'});
 
-  const ref = await loadOpeningReference();
+  // Draw the starting position straight away so something is always visible, even if the
+  // reference-data fetch below is slow or fails outright.
+  obBoardPositions = [new Chess().fen()];
+  obBoardSanMoves = [];
+  obBoardPly = 0;
+  await renderObBoard();
+
+  let ref;
+  try{
+    ref = await loadOpeningReference();
+  }catch(err){
+    console.error('Failed to load opening reference data', err);
+    titleEl.textContent = node.fullName;
+    document.getElementById('obBoardMoveLabel').textContent = "Couldn't load reference moves (check your connection) — showing the start position.";
+    return;
+  }
   const entry = ref[node.fullName];
   if(!entry){
     titleEl.textContent = node.fullName;
-    document.getElementById('obBoardMoveLabel').textContent = "No exact reference line found for this name.";
-    obBoardPositions = [new Chess().fen()];
-    obBoardSanMoves = [];
-    obBoardPly = 0;
-    renderObBoard();
+    document.getElementById('obBoardMoveLabel').textContent = "No exact reference line found for this name — showing the start position.";
     return;
   }
   const sanMoves = parseMovesString(entry.pgn);
@@ -2033,9 +2045,10 @@ async function openOpeningBoard(node){
   obBoardSanMoves = sanClean;
   obBoardPly = positions.length - 1; // jump straight to the end of this branch
   titleEl.textContent = `${node.fullName} (${entry.eco})`;
-  renderObBoard();
+  await renderObBoard();
 }
-function renderObBoard(){
+async function renderObBoard(){
+  await ensurePieceSprite();
   drawBoardSquares(obBoardPositions[obBoardPly], 'obBoard');
   const total = obBoardSanMoves.length;
   document.getElementById('obBoardMoveLabel').textContent = obBoardPly === 0 ? 'Start' : `${Math.ceil(obBoardPly / 2)}. ${obBoardPly % 2 === 1 ? '' : '…'}${obBoardSanMoves[obBoardPly - 1]} (${obBoardPly}/${total})`;
