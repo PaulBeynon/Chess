@@ -142,7 +142,8 @@
   .ob-toggle{ flex:none; width:20px; height:20px; border-radius:4px; border:1px solid var(--line); background:var(--panel-2); color:var(--brass); font-family:'IBM Plex Mono', monospace; font-size:12px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
   .ob-toggle.spacer{ visibility:hidden; }
   .ob-main{ flex:1; min-width:0; }
-  .ob-name{ font-family:'IBM Plex Mono', monospace; font-size:13px; }
+  .ob-name{ font-family:'IBM Plex Mono', monospace; font-size:13px; cursor:pointer; }
+  .ob-name:hover{ color:var(--brass); text-decoration:underline; }
   .ob-eco{ font-size:11px; color:var(--text-dim); opacity:0.75; margin-left:6px; }
   .ob-meta{ font-size:11px; color:var(--text-dim); margin-top:2px; }
   .ob-bar-track{ height:6px; border-radius:3px; background:rgba(255,255,255,0.08); margin-top:6px; max-width:280px; overflow:hidden; }
@@ -361,6 +362,23 @@
       <h3 style="margin-bottom:6px; font-size:16px; margin-top:22px;">Lifetime</h3>
       <p class="small" id="lifetimeAllCaption" style="margin-bottom:14px;"></p>
       <div id="lifetimeAllCards" class="row"></div>
+
+      <div id="obBoardPanel" class="hidden" style="margin-top:26px;">
+        <div class="flex-between" style="margin-bottom:8px;">
+          <span class="small" id="obBoardTitle"></span>
+          <button class="btn ghost" id="obBoardClose">✕ Close</button>
+        </div>
+        <div style="max-width:280px; margin:0 auto;">
+          <div class="board" id="obBoard"></div>
+        </div>
+        <div class="row" style="justify-content:center; gap:6px; margin-top:10px; align-items:center;">
+          <button class="icon" id="obBoardStart">⏮</button>
+          <button class="icon" id="obBoardPrev">◀</button>
+          <span class="small" id="obBoardMoveLabel"></span>
+          <button class="icon" id="obBoardNext">▶</button>
+          <button class="icon" id="obBoardEnd">⏭</button>
+        </div>
+      </div>
 
       <div class="flex-between" style="margin-top:26px; margin-bottom:6px; flex-wrap:wrap; gap:8px; align-items:center;">
         <h3 style="font-size:16px;">Performance by opening</h3>
@@ -1840,6 +1858,8 @@ async function renderLifetime(){
 // Lichess opening names follow "Main Line: Variation, Sub-variation, Sub-sub-variation" — splitting
 // on ':' then ',' gives a natural hierarchy (e.g. "Sicilian Defense" -> "Dragon Variation" -> "Yugoslav Attack").
 const OB_MIN_GAMES = 2;
+let obIdCounter = 0;
+const obNodeRegistry = new Map(); // node.id -> node, rebuilt every render, used to resolve board-view clicks
 
 function splitOpeningPath(name){
   const colonIdx = name.indexOf(':');
@@ -1852,16 +1872,19 @@ function splitOpeningPath(name){
 
 function buildOpeningTree(records){
   const root = { children: new Map() };
-  let idCounter = 0;
   for(const g of records){
     const segments = splitOpeningPath(g.openingName || 'Unknown opening');
     let node = root;
-    for(const seg of segments){
+    for(let i = 0; i < segments.length; i++){
+      const seg = segments[i];
       if(!node.children.has(seg)){
-        node.children.set(seg, {
-          id: 'ob-' + (idCounter++), name: seg, children: new Map(),
+        const fullName = i === 0 ? seg : `${segments[0]}: ${segments.slice(1, i + 1).join(', ')}`;
+        const newNode = {
+          id: 'ob-' + (obIdCounter++), name: seg, fullName, children: new Map(),
           games: 0, wins: 0, draws: 0, losses: 0, ecoSet: new Set()
-        });
+        };
+        node.children.set(seg, newNode);
+        obNodeRegistry.set(newNode.id, newNode);
       }
       node = node.children.get(seg);
       node.games++;
@@ -1897,7 +1920,7 @@ function renderOpeningNode(node){
     <div class="ob-row">
       ${toggleBtn}
       <div class="ob-main">
-        <span class="ob-name">${node.name}</span>${ecoLabel ? `<span class="ob-eco">(${ecoLabel})</span>` : ''}
+        <span class="ob-name" data-view="${node.id}">${node.name}</span>${ecoLabel ? `<span class="ob-eco">(${ecoLabel})</span>` : ''}
         <div class="ob-meta">${node.wins}-${node.losses}-${node.draws} in ${node.games} games</div>
         <div class="ob-bar-track"><div class="ob-bar-fill" style="width:${scorePct}%; background:${barColor};"></div></div>
       </div>
@@ -1914,7 +1937,10 @@ function renderOpeningBreakdown(all){
   const filterSel = document.getElementById('openingBreakdownFilter');
   const colorFilter = filterSel ? filterSel.value : 'all';
 
-  captionEl.textContent = `From your downloaded career history — tap an opening to expand into its variations (branches played at least ${OB_MIN_GAMES} times).`;
+  obIdCounter = 0;
+  obNodeRegistry.clear();
+
+  captionEl.textContent = `From your downloaded career history — tap "+" to expand into variations, tap a name to see the moves on a board (branches played at least ${OB_MIN_GAMES} times).`;
 
   const section = (records, heading) => {
     const topLevel = buildOpeningTopLevel(records);
@@ -1935,12 +1961,90 @@ function renderOpeningBreakdown(all){
 }
 document.getElementById('openingBreakdown').addEventListener('click', (e)=>{
   const toggleId = e.target.dataset.toggle;
+  const viewId = e.target.dataset.view;
+  if(viewId){
+    const node = obNodeRegistry.get(viewId);
+    if(node) openOpeningBoard(node);
+    return;
+  }
   if(!toggleId) return;
   const childrenEl = document.getElementById('ob-children-' + toggleId);
   if(!childrenEl) return;
   const expanded = childrenEl.classList.toggle('expanded');
   e.target.textContent = expanded ? '−' : '+';
 });
+
+// ---- Opening reference (eco/name -> canonical moves), used to draw a branch's position on a board ----
+// Sourced from the same public database Lichess itself uses to label opening names, so a node's
+// reconstructed fullName should match an entry here directly. Fetched once and cached in localStorage.
+let openingRefPromise = null;
+function loadOpeningReference(){
+  if(openingRefPromise) return openingRefPromise;
+  openingRefPromise = (async () => {
+    const cacheKey = 'ledger_opening_ref_v1';
+    try{
+      const cached = localStorage.getItem(cacheKey);
+      if(cached) return JSON.parse(cached);
+    }catch(e){ /* ignore, refetch */ }
+    const map = {};
+    for(const f of ['a','b','c','d','e']){
+      const res = await fetch(`https://raw.githubusercontent.com/lichess-org/chess-openings/master/${f}.tsv`);
+      const text = await res.text();
+      const lines = text.trim().split('\n').slice(1); // skip header row
+      for(const line of lines){
+        const [eco, name, pgn] = line.split('\t');
+        if(!name || !pgn) continue;
+        // Multiple rows can share a name via transposition; keep the shortest (main) line for that name.
+        if(!(name in map) || pgn.length < map[name].pgn.length) map[name] = {eco, pgn};
+      }
+    }
+    try{ localStorage.setItem(cacheKey, JSON.stringify(map)); }catch(e){ /* over quota, still usable this session */ }
+    return map;
+  })();
+  return openingRefPromise;
+}
+
+let obBoardPositions = [];
+let obBoardSanMoves = [];
+let obBoardPly = 0;
+
+async function openOpeningBoard(node){
+  const panel = document.getElementById('obBoardPanel');
+  const titleEl = document.getElementById('obBoardTitle');
+  panel.classList.remove('hidden');
+  titleEl.textContent = `${node.fullName} — loading…`;
+  document.getElementById('obBoardMoveLabel').textContent = '';
+  panel.scrollIntoView({behavior:'smooth', block:'start'});
+
+  const ref = await loadOpeningReference();
+  const entry = ref[node.fullName];
+  if(!entry){
+    titleEl.textContent = node.fullName;
+    document.getElementById('obBoardMoveLabel').textContent = "No exact reference line found for this name.";
+    obBoardPositions = [new Chess().fen()];
+    obBoardSanMoves = [];
+    obBoardPly = 0;
+    renderObBoard();
+    return;
+  }
+  const sanMoves = parseMovesString(entry.pgn);
+  const {positions, sanClean} = buildPositions(sanMoves);
+  obBoardPositions = positions;
+  obBoardSanMoves = sanClean;
+  obBoardPly = positions.length - 1; // jump straight to the end of this branch
+  titleEl.textContent = `${node.fullName} (${entry.eco})`;
+  renderObBoard();
+}
+function renderObBoard(){
+  drawBoardSquares(obBoardPositions[obBoardPly], 'obBoard');
+  const total = obBoardSanMoves.length;
+  document.getElementById('obBoardMoveLabel').textContent = obBoardPly === 0 ? 'Start' : `${Math.ceil(obBoardPly / 2)}. ${obBoardPly % 2 === 1 ? '' : '…'}${obBoardSanMoves[obBoardPly - 1]} (${obBoardPly}/${total})`;
+}
+document.getElementById('obBoardClose').addEventListener('click', ()=>{ document.getElementById('obBoardPanel').classList.add('hidden'); });
+document.getElementById('obBoardStart').addEventListener('click', ()=>{ obBoardPly = 0; renderObBoard(); });
+document.getElementById('obBoardEnd').addEventListener('click', ()=>{ obBoardPly = obBoardPositions.length - 1; renderObBoard(); });
+document.getElementById('obBoardPrev').addEventListener('click', ()=>{ if(obBoardPly > 0){ obBoardPly--; renderObBoard(); } });
+document.getElementById('obBoardNext').addEventListener('click', ()=>{ if(obBoardPly < obBoardPositions.length - 1){ obBoardPly++; renderObBoard(); } });
 
 function renderBreakdown(){
   const all = Object.values(state.autoAnalysis).filter(a => a.done)
