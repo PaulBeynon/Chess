@@ -1876,9 +1876,16 @@ function splitOpeningPath(name){
 function resolveOpeningName(rawName, eco, ref){
   if(!ref || !rawName) return rawName;
   if(ref.byName[rawName]) return rawName; // already an exact canonical name
-  if(!eco) return rawName;
-  const canonical = ref.byEcoShortName[eco + '|' + rawName];
-  return canonical || rawName;
+  if(eco){
+    const precise = ref.byEcoShortName[eco + '|' + rawName];
+    if(precise) return precise;
+  }
+  // Fall back to a plain short-name match, ignoring eco — Lichess's live game classifier can report a
+  // slightly different eco than the current reference table for the same named line. Only applied when
+  // that short name is unambiguous (maps to exactly one parent across the whole database), to avoid
+  // wrongly merging generic variation names (e.g. "Main Line") that appear under many different openings.
+  const loose = ref.byShortName[rawName];
+  return loose || rawName;
 }
 
 function buildOpeningTree(records, ref){
@@ -2019,7 +2026,19 @@ function loadOpeningReference(){
       const key = eco + '|' + shortName;
       if(!(key in byEcoShortName) || name.length < byEcoShortName[key].length) byEcoShortName[key] = name;
     }
-    return { byName, byEcoShortName };
+    // Looser fallback ignoring eco entirely, kept only where the short segment maps to exactly one
+    // parent across the whole database (covers eco drift between Lichess's live tagger and this table).
+    const shortNameCandidates = {};
+    for(const name in byName){
+      const shortName = name.split(/[:,]/).pop().trim();
+      (shortNameCandidates[shortName] || (shortNameCandidates[shortName] = new Set())).add(name);
+    }
+    const byShortName = {};
+    for(const shortName in shortNameCandidates){
+      const candidates = shortNameCandidates[shortName];
+      if(candidates.size === 1) byShortName[shortName] = [...candidates][0];
+    }
+    return { byName, byEcoShortName, byShortName };
   })();
   openingRefPromise.catch(() => { openingRefPromise = null; }); // let a later click retry instead of staying broken all session
   return openingRefPromise;
