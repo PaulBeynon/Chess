@@ -1961,11 +1961,17 @@ async function renderOpeningBreakdown(all){
   obIdCounter = 0;
   obNodeRegistry.clear();
 
-  captionEl.textContent = `From your downloaded career history — tap "+" to expand into variations, tap a name to see the moves on a board (branches played at least ${OB_MIN_GAMES} times).`;
-
   let ref = null;
-  try{ ref = await loadOpeningReference(); }
-  catch(err){ console.error('Opening reference unavailable — grouping without alias repair', err); }
+  let refStatus = 'loading…';
+  try{
+    ref = await loadOpeningReference();
+    refStatus = `${Object.keys(ref.byName).length} reference openings loaded`;
+  }catch(err){
+    console.error('Opening reference unavailable — grouping without alias repair', err);
+    refStatus = 'reference data unavailable (nesting repair inactive) — check your connection';
+  }
+
+  captionEl.textContent = `From your downloaded career history — tap "+" to expand into variations, tap a name to see the moves on a board (branches played at least ${OB_MIN_GAMES} times). ${refStatus}.`;
 
   const records = colorFilter === 'all' ? all : all.filter(g => (colorFilter === 'white') === g.isUserWhite);
   const topLevel = buildOpeningTopLevel(records, ref);
@@ -1995,7 +2001,7 @@ let openingRefPromise = null;
 function loadOpeningReference(){
   if(openingRefPromise) return openingRefPromise;
   openingRefPromise = (async () => {
-    const cacheKey = 'ledger_opening_ref_v1';
+    const cacheKey = 'ledger_opening_ref_v2';
     let byName = null;
     try{
       const cached = localStorage.getItem(cacheKey);
