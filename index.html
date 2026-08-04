@@ -1857,6 +1857,9 @@ async function renderLifetime(){
 // ---- Performance by opening: cascading tree built from the career-history opening names ----
 // Lichess opening names follow "Main Line: Variation, Sub-variation, Sub-sub-variation" — splitting
 // on ':' then ',' gives a natural hierarchy (e.g. "Sicilian Defense" -> "Dragon Variation" -> "Yugoslav Attack").
+// Some games get tagged with a short/alias name that's missing its parent prefix (e.g. "Vienna Gambit"
+// instead of "Vienna Game: Vienna Gambit") — resolveOpeningName() repairs these using the eco code so
+// they still nest under the right parent instead of showing up as a disconnected top-level entry.
 const OB_MIN_GAMES = 2;
 let obIdCounter = 0;
 const obNodeRegistry = new Map(); // node.id -> node, rebuilt every render, used to resolve board-view clicks
@@ -1870,10 +1873,19 @@ function splitOpeningPath(name){
   return [main, ...parts];
 }
 
-function buildOpeningTree(records){
+function resolveOpeningName(rawName, eco, ref){
+  if(!ref || !rawName) return rawName;
+  if(ref.byName[rawName]) return rawName; // already an exact canonical name
+  if(!eco) return rawName;
+  const canonical = ref.byEcoShortName[eco + '|' + rawName];
+  return canonical || rawName;
+}
+
+function buildOpeningTree(records, ref){
   const root = { children: new Map() };
   for(const g of records){
-    const segments = splitOpeningPath(g.openingName || 'Unknown opening');
+    const resolvedName = resolveOpeningName(g.openingName || 'Unknown opening', g.eco, ref);
+    const segments = splitOpeningPath(resolvedName);
     let node = root;
     for(let i = 0; i < segments.length; i++){
       const seg = segments[i];
@@ -1881,7 +1893,7 @@ function buildOpeningTree(records){
         const fullName = i === 0 ? seg : `${segments[0]}: ${segments.slice(1, i + 1).join(', ')}`;
         const newNode = {
           id: 'ob-' + (obIdCounter++), name: seg, fullName, children: new Map(),
-          games: 0, wins: 0, draws: 0, losses: 0, ecoSet: new Set()
+          games: 0, wins: 0, draws: 0, losses: 0, whiteGames: 0, blackGames: 0, ecoSet: new Set()
         };
         node.children.set(seg, newNode);
         obNodeRegistry.set(newNode.id, newNode);
@@ -1891,37 +1903,39 @@ function buildOpeningTree(records){
       if(g.result === 'win') node.wins++;
       else if(g.result === 'draw') node.draws++;
       else node.losses++;
+      if(g.isUserWhite) node.whiteGames++; else node.blackGames++;
       if(g.eco) node.ecoSet.add(g.eco);
     }
   }
   return root;
 }
 
-function buildOpeningTopLevel(records){
+function buildOpeningTopLevel(records, ref){
   if(records.length === 0) return [];
-  const root = buildOpeningTree(records);
+  const root = buildOpeningTree(records, ref);
   return [...root.children.values()].filter(c => c.games >= OB_MIN_GAMES).sort((a, b) => b.games - a.games);
 }
 
-function renderOpeningNode(node){
+function renderOpeningNode(node, showColorSplit){
   const scorePct = 100 * (node.wins + node.draws / 2) / node.games;
   const barColor = scorePct >= 60 ? 'var(--good)' : scorePct >= 45 ? 'var(--brass)' : 'var(--bad)';
   const ecoArr = [...node.ecoSet].sort();
   const ecoLabel = ecoArr.length === 0 ? '' : ecoArr.length === 1 ? ecoArr[0] : `${ecoArr[0]}–${ecoArr[ecoArr.length - 1]}`;
+  const colorNote = showColorSplit && node.whiteGames > 0 && node.blackGames > 0 ? ` · ${node.whiteGames}W / ${node.blackGames}B` : '';
   const childrenArr = [...node.children.values()].filter(c => c.games >= OB_MIN_GAMES).sort((a, b) => b.games - a.games);
   const hasChildren = childrenArr.length > 0;
   const toggleBtn = hasChildren
     ? `<button class="ob-toggle" data-toggle="${node.id}">+</button>`
     : `<span class="ob-toggle spacer">+</span>`;
   const childrenHtml = hasChildren
-    ? `<div class="ob-children" id="ob-children-${node.id}">${childrenArr.map(renderOpeningNode).join('')}</div>`
+    ? `<div class="ob-children" id="ob-children-${node.id}">${childrenArr.map(c => renderOpeningNode(c, showColorSplit)).join('')}</div>`
     : '';
   return `<div>
     <div class="ob-row">
       ${toggleBtn}
       <div class="ob-main">
         <span class="ob-name" data-view="${node.id}">${node.name}</span>${ecoLabel ? `<span class="ob-eco">(${ecoLabel})</span>` : ''}
-        <div class="ob-meta">${node.wins}-${node.losses}-${node.draws} in ${node.games} games</div>
+        <div class="ob-meta">${node.wins}-${node.losses}-${node.draws} in ${node.games} games${colorNote}</div>
         <div class="ob-bar-track"><div class="ob-bar-fill" style="width:${scorePct}%; background:${barColor};"></div></div>
       </div>
       <span class="ob-score">${scorePct.toFixed(1)}%</span>
@@ -1930,7 +1944,7 @@ function renderOpeningNode(node){
   </div>`;
 }
 
-function renderOpeningBreakdown(all){
+async function renderOpeningBreakdown(all){
   const el = document.getElementById('openingBreakdown');
   const captionEl = document.getElementById('openingBreakdownCaption');
   if(!el) return;
@@ -1942,20 +1956,13 @@ function renderOpeningBreakdown(all){
 
   captionEl.textContent = `From your downloaded career history — tap "+" to expand into variations, tap a name to see the moves on a board (branches played at least ${OB_MIN_GAMES} times).`;
 
-  const section = (records, heading) => {
-    const topLevel = buildOpeningTopLevel(records);
-    if(topLevel.length === 0) return '';
-    return `<h4 class="ob-section-heading">${heading}</h4>${topLevel.map(renderOpeningNode).join('')}`;
-  };
+  let ref = null;
+  try{ ref = await loadOpeningReference(); }
+  catch(err){ console.error('Opening reference unavailable — grouping without alias repair', err); }
 
-  let html = '';
-  if(colorFilter === 'all'){
-    html += section(all.filter(g => g.isUserWhite), 'As White');
-    html += section(all.filter(g => !g.isUserWhite), 'As Black');
-  } else {
-    const recs = all.filter(g => (colorFilter === 'white') === g.isUserWhite);
-    html += section(recs, colorFilter === 'white' ? 'As White' : 'As Black');
-  }
+  const records = colorFilter === 'all' ? all : all.filter(g => (colorFilter === 'white') === g.isUserWhite);
+  const topLevel = buildOpeningTopLevel(records, ref);
+  const html = topLevel.map(n => renderOpeningNode(n, colorFilter === 'all')).join('');
 
   el.innerHTML = html || `<div class="empty">Not enough games yet for this filter — download more career history, or try a different colour.</div>`;
 }
@@ -1982,24 +1989,37 @@ function loadOpeningReference(){
   if(openingRefPromise) return openingRefPromise;
   openingRefPromise = (async () => {
     const cacheKey = 'ledger_opening_ref_v1';
+    let byName = null;
     try{
       const cached = localStorage.getItem(cacheKey);
-      if(cached) return JSON.parse(cached);
+      if(cached) byName = JSON.parse(cached);
     }catch(e){ /* ignore, refetch */ }
-    const map = {};
-    for(const f of ['a','b','c','d','e']){
-      const res = await fetch(`https://raw.githubusercontent.com/lichess-org/chess-openings/master/${f}.tsv`);
-      const text = await res.text();
-      const lines = text.trim().split('\n').slice(1); // skip header row
-      for(const line of lines){
-        const [eco, name, pgn] = line.split('\t');
-        if(!name || !pgn) continue;
-        // Multiple rows can share a name via transposition; keep the shortest (main) line for that name.
-        if(!(name in map) || pgn.length < map[name].pgn.length) map[name] = {eco, pgn};
+    if(!byName){
+      byName = {};
+      for(const f of ['a','b','c','d','e']){
+        const res = await fetch(`https://raw.githubusercontent.com/lichess-org/chess-openings/master/${f}.tsv`);
+        const text = await res.text();
+        const lines = text.trim().split('\n').slice(1); // skip header row
+        for(const line of lines){
+          const [eco, name, pgn] = line.split('\t');
+          if(!name || !pgn) continue;
+          // Multiple rows can share a name via transposition; keep the shortest (main) line for that name.
+          if(!(name in byName) || pgn.length < byName[name].pgn.length) byName[name] = {eco, pgn};
+        }
       }
+      try{ localStorage.setItem(cacheKey, JSON.stringify(byName)); }catch(e){ /* over quota, still usable this session */ }
     }
-    try{ localStorage.setItem(cacheKey, JSON.stringify(map)); }catch(e){ /* over quota, still usable this session */ }
-    return map;
+    // Reverse index: some games get tagged with just the short/final segment of a name (e.g. "Vienna
+    // Gambit" instead of "Vienna Game: Vienna Gambit"). Map eco+shortSegment -> the full canonical name
+    // so those can be resolved back to their proper nested position.
+    const byEcoShortName = {};
+    for(const name in byName){
+      const eco = byName[name].eco;
+      const shortName = name.split(/[:,]/).pop().trim();
+      const key = eco + '|' + shortName;
+      if(!(key in byEcoShortName) || name.length < byEcoShortName[key].length) byEcoShortName[key] = name;
+    }
+    return { byName, byEcoShortName };
   })();
   openingRefPromise.catch(() => { openingRefPromise = null; }); // let a later click retry instead of staying broken all session
   return openingRefPromise;
@@ -2033,7 +2053,7 @@ async function openOpeningBoard(node){
     document.getElementById('obBoardMoveLabel').textContent = "Couldn't load reference moves (check your connection) — showing the start position.";
     return;
   }
-  const entry = ref[node.fullName];
+  const entry = ref.byName[node.fullName];
   if(!entry){
     titleEl.textContent = node.fullName;
     document.getElementById('obBoardMoveLabel').textContent = "No exact reference line found for this name — showing the start position.";
