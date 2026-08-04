@@ -226,6 +226,7 @@
       <button class="btn ghost" id="gateEmailSignInBtn" style="flex:1;">Sign in</button>
       <button class="btn ghost" id="gateEmailSignUpBtn" style="flex:1;">Create account</button>
     </div>
+    <button id="gateForgotBtn" style="background:none; border:none; color:var(--text-dim); font-size:12px; text-decoration:underline; cursor:pointer; margin-top:10px; padding:0;">Forgot password?</button>
 
     <p class="small" id="gateStatus" style="margin-top:14px; min-height:1.2em;"></p>
     <button class="btn ghost" id="gateSkipBtn" style="margin-top:8px;">Continue without an account</button>
@@ -500,7 +501,7 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
   import {
     getAuth, GoogleAuthProvider, signInWithPopup,
-    createUserWithEmailAndPassword, signInWithEmailAndPassword,
+    createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail,
     onAuthStateChanged, signOut
   } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
   import {
@@ -534,6 +535,7 @@
     signIn: ()=> signInWithPopup(auth, new GoogleAuthProvider()),
     signInEmail: (email, password)=> signInWithEmailAndPassword(auth, email, password),
     signUpEmail: (email, password)=> createUserWithEmailAndPassword(auth, email, password),
+    resetPassword: (email)=> sendPasswordResetEmail(auth, email),
     signOutUser: ()=> signOut(auth),
     onAuthChange: (cb)=> configured ? onAuthStateChanged(auth, cb) : null,
 
@@ -720,11 +722,15 @@ async function initCloudSync(){
   const showGateError = (err)=>{
     const readable = {
       'auth/popup-closed-by-user': 'Popup closed before finishing — try again.',
+      'auth/popup-blocked': "Browser blocked the sign-in popup — check your browser's popup-blocker settings and try again.",
+      'auth/unauthorized-domain': "This site isn't on Google's allowed list for this app yet — needs adding in Firebase console (Authentication → Settings → Authorized domains).",
       'auth/wrong-password': 'Wrong password.',
       'auth/user-not-found': 'No account with that email — try "Create account" instead.',
       'auth/email-already-in-use': 'An account already exists with that email — try "Sign in" instead.',
       'auth/weak-password': 'Password needs to be at least 6 characters.',
       'auth/invalid-email': 'That doesn\'t look like a valid email address.',
+      'auth/too-many-requests': 'Too many attempts — wait a bit and try again.',
+      'auth/network-request-failed': 'Network error — check your connection and try again.',
     }[err?.code] || (err?.message || 'Something went wrong — try again.');
     document.getElementById('gateStatus').textContent = readable;
   };
@@ -747,6 +753,14 @@ async function initCloudSync(){
     if(!email || !password){ document.getElementById('gateStatus').textContent = 'Enter both email and password.'; return; }
     document.getElementById('gateStatus').textContent = 'Creating account…';
     window.LedgerCloud.signUpEmail(email, password).catch(showGateError);
+  });
+  document.getElementById('gateForgotBtn').addEventListener('click', ()=>{
+    const email = document.getElementById('gateEmail').value.trim();
+    if(!email){ document.getElementById('gateStatus').textContent = 'Enter your email above first, then tap "Forgot password?".'; return; }
+    document.getElementById('gateStatus').textContent = 'Sending reset email…';
+    window.LedgerCloud.resetPassword(email)
+      .then(()=>{ document.getElementById('gateStatus').textContent = `Reset email sent to ${email} — check your inbox (and spam folder).`; })
+      .catch(showGateError);
   });
   document.getElementById('gateSkipBtn').addEventListener('click', ()=>{
     localStorage.setItem(SKIP_LOGIN_KEY, '1');
