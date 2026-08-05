@@ -460,6 +460,11 @@
       <span class="pill active" id="repWhitePill">White repertoire</span>
       <span class="pill" id="repBlackPill">Black repertoire</span>
     </div>
+    <div class="row" style="margin-bottom:16px;">
+      <span class="pill active" id="repViewImportPill">Import order</span>
+      <span class="pill" id="repViewOpeningPill">By opening</span>
+    </div>
+    <p class="small" id="repViewCaption" style="margin:-8px 0 14px; opacity:0.7;"></p>
 
     <div id="repLibrary"></div>
 
@@ -619,6 +624,7 @@ const state = {
   bestMoveUcis: null,    // ply -> engine's suggested move (uci), from cached analysis
   repertoire: loadRepertoire(),
   repColor: 'white',
+  repView: 'import',
   autoAnalysis: {},        // gameId -> {blunders, mistakes, inaccuracies, done}
   autoAnalysisRunning: false
 };
@@ -797,7 +803,7 @@ async function syncOnSignIn(uid){
     if(cloudRepertoire){
       state.repertoire = { white: cloudRepertoire.white || [], black: cloudRepertoire.black || [] };
       localStorage.setItem('ledger_repertoire', JSON.stringify(state.repertoire));
-      if(document.getElementById('repLibrary')) renderRepTree();
+      if(document.getElementById('repLibrary')) renderCurrentRepView();
     } else {
       await window.LedgerCloud.pushRepertoire(uid, state.repertoire);
     }
@@ -832,7 +838,7 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
     document.querySelectorAll('section[id^="tab-"]').forEach(s=>s.classList.add('hidden'));
     btn.classList.add('active');
     document.getElementById('tab-'+btn.dataset.tab).classList.remove('hidden');
-    if(btn.dataset.tab === 'repertoire') renderRepTree();
+    if(btn.dataset.tab === 'repertoire') renderCurrentRepView();
     if(btn.dataset.tab === 'breakdown'){ renderBreakdown(); renderLifetime(); }
   });
 });
@@ -2058,10 +2064,33 @@ function loadOpeningReference(){
       const candidates = shortNameCandidates[shortName];
       if(candidates.size === 1) byShortName[shortName] = [...candidates][0];
     }
-    return { byName, byEcoShortName, byShortName };
+    // Position-based index: maps the resulting board position (after playing a canonical entry's
+    // moves) to its name. Used to classify a repertoire line by the actual moves it plays, rather
+    // than by name — robust to however the line itself got named.
+    const byFinalFen = {};
+    for(const name in byName){
+      try{
+        const sanMoves = parseMovesString(byName[name].pgn);
+        const { positions } = buildPositions(sanMoves);
+        const fen4 = positions[positions.length - 1].split(' ').slice(0, 4).join(' ');
+        if(!(fen4 in byFinalFen) || name.length < byFinalFen[fen4].length) byFinalFen[fen4] = name;
+      }catch(e){ /* skip malformed reference row */ }
+    }
+    return { byName, byEcoShortName, byShortName, byFinalFen };
   })();
   openingRefPromise.catch(() => { openingRefPromise = null; }); // let a later click retry instead of staying broken all session
   return openingRefPromise;
+}
+
+function matchLineToCanonicalName(sanMoves, ref){
+  if(!ref || !sanMoves || sanMoves.length === 0) return null;
+  const { positions } = buildPositions(sanMoves);
+  for(let k = positions.length - 1; k >= 1; k--){
+    const fen4 = positions[k].split(' ').slice(0, 4).join(' ');
+    const name = ref.byFinalFen[fen4];
+    if(name) return name;
+  }
+  return null;
 }
 
 let obBoardPositions = [new Chess().fen()];
@@ -2248,7 +2277,23 @@ function setRepColor(c){
   document.getElementById('repBlackPill').classList.toggle('active', c==='black');
   document.getElementById('importStudyBtn').textContent = `Import study into ${c} repertoire`;
   closeRepBoard();
-  renderRepTree();
+  renderCurrentRepView();
+}
+document.getElementById('repViewImportPill').addEventListener('click', ()=>setRepView('import'));
+document.getElementById('repViewOpeningPill').addEventListener('click', ()=>setRepView('opening'));
+function setRepView(v){
+  state.repView = v;
+  document.getElementById('repViewImportPill').classList.toggle('active', v==='import');
+  document.getElementById('repViewOpeningPill').classList.toggle('active', v==='opening');
+  document.getElementById('repViewCaption').textContent = v === 'opening'
+    ? 'Your line names are kept — grouped here by their actual opening (matched against a reference database), with the canonical name and ECO shown for context.'
+    : '';
+  closeRepBoard();
+  renderCurrentRepView();
+}
+function renderCurrentRepView(){
+  if(state.repView === 'opening') renderRepTreeByOpening();
+  else renderRepTree();
 }
 
 /* ---- Click-through board for a repertoire line ---- */
@@ -2381,7 +2426,7 @@ document.getElementById('importStudyBtn').addEventListener('click', async ()=>{
       const added = addRepertoireLine(state.repColor, name, null, sanClean);
       if(added) imported++; else skipped++;
     }
-    renderRepTree();
+    renderCurrentRepView();
     status.textContent = `Imported ${imported} chapter${imported===1?'':'s'}${skipped ? ` (${skipped} skipped — empty or already in your library)` : ''} into your ${state.repColor} repertoire.`;
   }catch(err){
     console.error(err);
@@ -2408,7 +2453,7 @@ document.getElementById('importPgnBtn').addEventListener('click', ()=>{
       const added = addRepertoireLine(state.repColor, chapterName, null, sanClean);
       if(added) imported++; else skipped++;
     });
-    renderRepTree();
+    renderCurrentRepView();
     alert(`Detected ${chunks.length} games in that paste — imported ${imported}${skipped ? `, skipped ${skipped}` : ''}.`);
     document.getElementById('pgnImport').value = '';
     document.getElementById('pgnImportName').value = '';
@@ -2419,7 +2464,7 @@ document.getElementById('importPgnBtn').addEventListener('click', ()=>{
   if(sanClean.length === 0){ alert("Could not parse any moves from that PGN — check it's plain move text (e.g. \"1. e4 e5 2. Nf3\"), not a link or an empty chapter."); return; }
   if(!name){ alert('Give this line a name first — that\'s what turns your repertoire into a browsable library.'); return; }
   addRepertoireLine(state.repColor, name, null, sanClean);
-  renderRepTree();
+  renderCurrentRepView();
   document.getElementById('pgnImport').value = '';
   document.getElementById('pgnImportName').value = '';
 });
@@ -2428,7 +2473,7 @@ document.getElementById('clearRepBtn').addEventListener('click', ()=>{
   state.repertoire[state.repColor] = [];
   saveRepertoire();
   closeRepBoard();
-  renderRepTree();
+  renderCurrentRepView();
 });
 // Renders the library as nested, collapsible headings (main opening -> variation -> sub-variation,
 // arbitrarily deep) using native <details>/<summary> so each branch is click-to-expand.
@@ -2479,6 +2524,101 @@ function renderRepTree(){
     ? topLevel.map(renderNode).join('')
     : '<div class="empty">No top-level openings yet — everything currently in this library is nested under a missing parent.</div>';
 }
+
+function formatMoveList(moves){
+  return moves.map((san, i) => i % 2 === 0 ? `${i / 2 + 1}.${san}` : san).join(' ');
+}
+
+function countDescendantLines(node){
+  let total = node.lines.length;
+  for(const child of node.children.values()) total += countDescendantLines(child);
+  return total;
+}
+
+// Clusters repertoire lines by their real opening — identified by matching each line's actual
+// moves against the reference database (matchLineToCanonicalName), not by whatever the line was
+// named on import. Custom names (e.g. from a course/tutorial) are kept as the leaf label; the
+// canonical name + ECO is shown at the cluster level for context.
+let rcIdCounter = 0;
+async function renderRepTreeByOpening(){
+  const container = document.getElementById('repLibrary');
+  const lines = state.repertoire[state.repColor];
+  if(lines.length === 0){
+    container.innerHTML = '<div class="empty">No lines yet. Import a PGN, or add deviations from the Analysis tab.</div>';
+    return;
+  }
+  container.innerHTML = '<div class="empty">Matching lines against the opening database…</div>';
+
+  let ref = null;
+  try{ ref = await loadOpeningReference(); }
+  catch(err){ console.error('Opening reference unavailable for repertoire clustering', err); }
+  if(!ref){
+    container.innerHTML = '<div class="empty">Couldn\'t load the opening reference data (check your connection) — try "Import order" instead, or reload the page.</div>';
+    return;
+  }
+
+  rcIdCounter = 0;
+  const root = { children: new Map() };
+  const unmatched = [];
+
+  for(const line of lines){
+    const canonicalName = matchLineToCanonicalName(line.moves, ref);
+    if(!canonicalName){ unmatched.push(line); continue; }
+    const segments = splitOpeningPath(canonicalName);
+    let node = root;
+    for(let i = 0; i < segments.length; i++){
+      const seg = segments[i];
+      if(!node.children.has(seg)){
+        const fullName = i === 0 ? seg : `${segments[0]}: ${segments.slice(1, i + 1).join(', ')}`;
+        node.children.set(seg, {
+          id: 'rcnode-' + (rcIdCounter++), name: seg, children: new Map(), lines: [],
+          eco: ref.byName[fullName]?.eco || null
+        });
+      }
+      node = node.children.get(seg);
+    }
+    node.lines.push(line);
+  }
+
+  const renderLeafLine = (line)=>{
+    const eco = line.eco ? `<span class="rep-eco">${line.eco}</span>` : '';
+    return `<div class="rep-row">
+      <span class="rep-toggle spacer">+</span>
+      <span class="rep-name" data-view="${line.id}">${line.name}</span>${eco}
+      <span class="rep-preview">${formatMoveList(line.moves)}</span>
+      <span class="rep-row-actions">
+        <button class="btn ghost" data-rename="${line.id}">✎</button>
+        <button class="btn ghost" data-delete="${line.id}">✕</button>
+      </span>
+    </div>`;
+  };
+
+  const renderClusterNode = (node)=>{
+    const childArr = [...node.children.values()].sort((a, b) => countDescendantLines(b) - countDescendantLines(a));
+    const hasContent = childArr.length > 0 || node.lines.length > 0;
+    const toggleBtn = hasContent
+      ? `<button class="rep-toggle" data-toggle="${node.id}">+</button>`
+      : `<span class="rep-toggle spacer">+</span>`;
+    const eco = node.eco ? `<span class="rep-eco">${node.eco}</span>` : '';
+    const innerHtml = hasContent
+      ? `<div class="rep-children" id="rep-children-${node.id}">${node.lines.map(renderLeafLine).join('')}${childArr.map(renderClusterNode).join('')}</div>`
+      : '';
+    return `<div>
+      <div class="rep-row">
+        ${toggleBtn}
+        <span class="rep-name" style="cursor:default;">${node.name}</span>${eco}
+      </div>
+      ${innerHtml}
+    </div>`;
+  };
+
+  const topLevel = [...root.children.values()].sort((a, b) => countDescendantLines(b) - countDescendantLines(a));
+  let html = topLevel.map(renderClusterNode).join('');
+  if(unmatched.length){
+    html += `<div class="ob-section-heading">Not matched to a known opening</div>${unmatched.map(renderLeafLine).join('')}`;
+  }
+  container.innerHTML = html || '<div class="empty">Nothing to show.</div>';
+}
 document.getElementById('repLibrary').addEventListener('click', (e)=>{
   const toggleId = e.target.dataset.toggle;
   const renameId = e.target.dataset.rename;
@@ -2500,7 +2640,7 @@ document.getElementById('repLibrary').addEventListener('click', (e)=>{
     const line = state.repertoire[state.repColor].find(l=>l.id===renameId);
     if(!line) return;
     const newName = prompt('Rename this line:', line.name);
-    if(newName && newName.trim()){ line.name = newName.trim(); saveRepertoire(); renderRepTree(); }
+    if(newName && newName.trim()){ line.name = newName.trim(); saveRepertoire(); renderCurrentRepView(); }
   } else if(deleteId){
     // Cascade: deleting a heading removes everything nested under it too, since a sub-variation
     // without its parent line no longer means anything.
@@ -2517,7 +2657,7 @@ document.getElementById('repLibrary').addEventListener('click', (e)=>{
     if(!confirm(msg)) return;
     state.repertoire[state.repColor] = lines.filter(l=>!idsToDelete.has(l.id));
     saveRepertoire();
-    renderRepTree();
+    renderCurrentRepView();
   }
 });
 
