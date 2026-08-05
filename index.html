@@ -344,7 +344,11 @@
         <div class="deviation-banner hidden" id="deviationBanner">
           <p id="deviationText"></p>
           <p class="small" id="deviationBookMoves" style="margin-top:-6px; opacity:0.8;"></p>
-          <button class="btn" id="addToRepertoireBtn">Add to my repertoire</button>
+          <div class="row" style="gap:8px;">
+            <button class="btn" id="addToRepertoireBtn">Add to my repertoire</button>
+            <button class="btn ghost" id="explainDeviationBtn">Explain this</button>
+          </div>
+          <p class="small" id="deviationExplanation" style="margin-top:10px; line-height:1.5; opacity:0.9;"></p>
         </div>
         <div class="deviation-banner hidden" id="inBookNoteBanner" style="border-color:var(--brass-dim);">
           <p id="inBookNoteText" class="small"></p>
@@ -507,6 +511,9 @@
   import {
     getFirestore, doc, setDoc, getDoc, deleteDoc, collection, getDocs, writeBatch
   } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+  import {
+    getFunctions, httpsCallable
+  } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-functions.js";
 
   const LEDGER_FIREBASE_CONFIG = {
     apiKey: "AIzaSyCUqiv1ui8_DZyzvoWrSvMbjQCt4ONeXso",
@@ -518,11 +525,12 @@
   };
   const configured = LEDGER_FIREBASE_CONFIG.apiKey !== "REPLACE_ME";
 
-  let auth = null, db = null;
+  let auth = null, db = null, functions = null;
   if(configured){
     const app = initializeApp(LEDGER_FIREBASE_CONFIG);
     auth = getAuth(app);
     db = getFirestore(app);
+    functions = getFunctions(app, 'europe-west2'); // must match the region in functions/index.js
   }
 
   // Bridge to the main (non-module) script, which can't use ES imports directly.
@@ -538,6 +546,14 @@
     resetPassword: (email)=> sendPasswordResetEmail(auth, email),
     signOutUser: ()=> signOut(auth),
     onAuthChange: (cb)=> configured ? onAuthStateChanged(auth, cb) : null,
+
+    // Coaching explanation for a single move — proxied through a Cloud Function so the Anthropic
+    // API key never touches the client. Throws on rate-limit/errors; caller shows the message.
+    explainDeviation: async (payload)=>{
+      const call = httpsCallable(functions, 'explainDeviation');
+      const res = await call(payload);
+      return res.data; // { explanation, cached }
+    },
 
     // Repertoire: one doc per user, holds {white:[...], black:[...]}
     pushRepertoire: async (uid, repertoire)=>{
@@ -2764,6 +2780,43 @@ function checkDeviation(){
       addRepertoireLine(state.userColor, name.trim() || defaultName, g?.opening?.eco || null, state.sanMoves.slice(0, deviationPly));
       banner.classList.add('hidden');
       alert('Added to your repertoire.');
+    };
+
+    const explainBtn = document.getElementById('explainDeviationBtn');
+    const explainEl = document.getElementById('deviationExplanation');
+    explainEl.textContent = '';
+    explainBtn.disabled = false;
+    explainBtn.textContent = 'Explain this';
+    explainBtn.onclick = async ()=>{
+      if(!window.LedgerCloud?.getUser?.()){
+        explainEl.textContent = 'Sign in to use explanations — they run through a Cloud Function tied to your account.';
+        return;
+      }
+      explainBtn.disabled = true;
+      explainBtn.textContent = 'Thinking…';
+      explainEl.textContent = '';
+      try{
+        const g = state.currentGame;
+        const payload = {
+          fenBefore: state.positions[deviationPly - 1],
+          moveSan: deviationMove,
+          bestSan: bestUci ? uciToSan(state.positions[deviationPly - 1], bestUci)?.san : undefined,
+          cpBefore: typeof cpBefore === 'number' ? cpBefore : undefined,
+          cpAfter: typeof cpAfter === 'number' ? cpAfter : undefined,
+          userColor: state.userColor,
+          moveNumber: Math.ceil(deviationPly / 2),
+          openingName: g?.opening?.name || undefined,
+        };
+        const { explanation } = await window.LedgerCloud.explainDeviation(payload);
+        explainEl.textContent = explanation;
+        explainBtn.textContent = 'Explain this';
+      }catch(err){
+        console.error('explainDeviation failed', err);
+        explainEl.textContent = err?.message || "Couldn't get an explanation right now — try again shortly.";
+        explainBtn.textContent = 'Explain this';
+      }finally{
+        explainBtn.disabled = false;
+      }
     };
   } else {
     banner.classList.add('hidden');
