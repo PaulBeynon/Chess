@@ -127,6 +127,8 @@
   .rep-toggle{ flex:none; width:20px; height:20px; border-radius:4px; border:1px solid var(--line); background:var(--panel-2); color:var(--brass); font-family:'IBM Plex Mono', monospace; font-size:12px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
   .rep-toggle.spacer{ visibility:hidden; }
   .rep-name{ font-weight:600; font-size:13px; cursor:pointer; }
+  .rc-commentary{ display:none; font-size:12px; line-height:1.5; color:var(--text-dim); background:var(--panel-2); border-left:2px solid var(--brass-dim); padding:10px 12px; margin:4px 0 4px 30px; border-radius:4px; }
+  .rc-commentary.expanded{ display:block; }
   .rep-name:hover{ color:var(--brass); text-decoration:underline; }
   .rep-eco{ font-family:'IBM Plex Mono', monospace; font-size:10px; color:var(--text-dim); }
   .rep-preview{ font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--text-dim); opacity:0.75; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
@@ -379,6 +381,7 @@
           <button class="icon" id="obBoardNext">▶</button>
           <button class="icon" id="obBoardEnd">⏭</button>
         </div>
+        <div id="obBoardCommentary" class="small" style="margin-top:14px; line-height:1.5; opacity:0.9;"></div>
       </div>
 
       <div class="flex-between" style="margin-top:26px; margin-bottom:6px; flex-wrap:wrap; gap:8px; align-items:center;">
@@ -460,11 +463,7 @@
       <span class="pill active" id="repWhitePill">White repertoire</span>
       <span class="pill" id="repBlackPill">Black repertoire</span>
     </div>
-    <div class="row" style="margin-bottom:16px;">
-      <span class="pill active" id="repViewImportPill">Import order</span>
-      <span class="pill" id="repViewOpeningPill">By opening</span>
-    </div>
-    <p class="small" id="repViewCaption" style="margin:-8px 0 14px; opacity:0.7;"></p>
+    <p class="small" id="repViewCaption" style="margin:0 0 14px; opacity:0.7;">Grouped by real opening (matched against a reference database) — your line names are kept as-is, with the canonical name, ECO, and a short blurb shown for context.</p>
 
     <div id="repLibrary"></div>
 
@@ -2093,6 +2092,34 @@ function matchLineToCanonicalName(sanMoves, ref){
   return null;
 }
 
+// ---- Opening commentary, sourced from Wikibooks "Chess Opening Theory" — the same wiki Lichess
+// itself pulls its inline opening snippets from. Pages are keyed by move path, e.g. the page for
+// 1.e4 e5 2.Nc3 Nc6 3.f4 is "Chess Opening Theory/1. e4/1...e5/2. Nc3/2...Nc6/3. f4".
+function buildWikibooksTitle(sanMoves){
+  const parts = sanMoves.map((san, i) => i % 2 === 0 ? `${i / 2 + 1}. ${san}` : `${(i - 1) / 2 + 1}...${san}`);
+  return 'Chess Opening Theory/' + parts.join('/');
+}
+const wikibooksCommentaryCache = new Map(); // title -> {text, url} | null (null = fetched, nothing found)
+async function fetchOpeningCommentary(sanMoves){
+  if(!sanMoves || sanMoves.length === 0) return null;
+  const title = buildWikibooksTitle(sanMoves);
+  if(wikibooksCommentaryCache.has(title)) return wikibooksCommentaryCache.get(title);
+  try{
+    const apiUrl = `https://en.wikibooks.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=extracts&exintro=1&explaintext=1&format=json&origin=*`;
+    const res = await fetch(apiUrl);
+    const data = await res.json();
+    const page = Object.values(data?.query?.pages || {})[0];
+    let text = (page && !('missing' in page)) ? (page.extract || '').trim() : '';
+    text = text.split(/For explanation of theory tables/i)[0].trim(); // strip standard page boilerplate
+    const result = text ? { text, url: `https://en.wikibooks.org/wiki/${title.replace(/ /g, '_')}` } : null;
+    wikibooksCommentaryCache.set(title, result);
+    return result;
+  }catch(err){
+    console.error('Wikibooks commentary fetch failed', err);
+    return null; // don't cache failures — allow retry on a later click
+  }
+}
+
 let obBoardPositions = [new Chess().fen()];
 let obBoardSanMoves = [];
 let obBoardPly = 0;
@@ -2100,9 +2127,11 @@ let obBoardPly = 0;
 async function openOpeningBoard(node){
   const panel = document.getElementById('obBoardPanel');
   const titleEl = document.getElementById('obBoardTitle');
+  const commentaryEl = document.getElementById('obBoardCommentary');
   panel.classList.remove('hidden');
   titleEl.textContent = `${node.fullName} — loading…`;
   document.getElementById('obBoardMoveLabel').textContent = '';
+  commentaryEl.textContent = '';
   panel.scrollIntoView({behavior:'smooth', block:'start'});
 
   // Draw the starting position straight away so something is always visible, even if the
@@ -2134,6 +2163,12 @@ async function openOpeningBoard(node){
   obBoardPly = positions.length - 1; // jump straight to the end of this branch
   titleEl.textContent = `${node.fullName} (${entry.eco})`;
   await renderObBoard();
+
+  commentaryEl.textContent = 'Loading commentary…';
+  const commentary = await fetchOpeningCommentary(sanClean);
+  commentaryEl.innerHTML = commentary
+    ? `${commentary.text.replace(/</g, '&lt;')}<br><a href="${commentary.url}" target="_blank" rel="noopener" style="color:var(--brass);">via Wikibooks: Chess Opening Theory ↗</a>`
+    : '';
 }
 async function renderObBoard(){
   await ensurePieceSprite();
@@ -2279,21 +2314,8 @@ function setRepColor(c){
   closeRepBoard();
   renderCurrentRepView();
 }
-document.getElementById('repViewImportPill').addEventListener('click', ()=>setRepView('import'));
-document.getElementById('repViewOpeningPill').addEventListener('click', ()=>setRepView('opening'));
-function setRepView(v){
-  state.repView = v;
-  document.getElementById('repViewImportPill').classList.toggle('active', v==='import');
-  document.getElementById('repViewOpeningPill').classList.toggle('active', v==='opening');
-  document.getElementById('repViewCaption').textContent = v === 'opening'
-    ? 'Your line names are kept — grouped here by their actual opening (matched against a reference database), with the canonical name and ECO shown for context.'
-    : '';
-  closeRepBoard();
-  renderCurrentRepView();
-}
 function renderCurrentRepView(){
-  if(state.repView === 'opening') renderRepTreeByOpening();
-  else renderRepTree();
+  renderRepTreeByOpening();
 }
 
 /* ---- Click-through board for a repertoire line ---- */
@@ -2540,6 +2562,7 @@ function countDescendantLines(node){
 // named on import. Custom names (e.g. from a course/tutorial) are kept as the leaf label; the
 // canonical name + ECO is shown at the cluster level for context.
 let rcIdCounter = 0;
+const rcNodeRegistry = new Map(); // node.id -> node, for resolving commentary clicks
 async function renderRepTreeByOpening(){
   const container = document.getElementById('repLibrary');
   const lines = state.repertoire[state.repColor];
@@ -2553,11 +2576,12 @@ async function renderRepTreeByOpening(){
   try{ ref = await loadOpeningReference(); }
   catch(err){ console.error('Opening reference unavailable for repertoire clustering', err); }
   if(!ref){
-    container.innerHTML = '<div class="empty">Couldn\'t load the opening reference data (check your connection) — try "Import order" instead, or reload the page.</div>';
+    container.innerHTML = '<div class="empty">Couldn\'t load the opening reference data — check your connection and reload the page.</div>';
     return;
   }
 
   rcIdCounter = 0;
+  rcNodeRegistry.clear();
   const root = { children: new Map() };
   const unmatched = [];
 
@@ -2570,10 +2594,14 @@ async function renderRepTreeByOpening(){
       const seg = segments[i];
       if(!node.children.has(seg)){
         const fullName = i === 0 ? seg : `${segments[0]}: ${segments.slice(1, i + 1).join(', ')}`;
-        node.children.set(seg, {
+        const entry = ref.byName[fullName];
+        const newNode = {
           id: 'rcnode-' + (rcIdCounter++), name: seg, children: new Map(), lines: [],
-          eco: ref.byName[fullName]?.eco || null
-        });
+          eco: entry?.eco || null,
+          canonicalSan: entry ? parseMovesString(entry.pgn) : null
+        };
+        node.children.set(seg, newNode);
+        rcNodeRegistry.set(newNode.id, newNode);
       }
       node = node.children.get(seg);
     }
@@ -2600,14 +2628,21 @@ async function renderRepTreeByOpening(){
       ? `<button class="rep-toggle" data-toggle="${node.id}">+</button>`
       : `<span class="rep-toggle spacer">+</span>`;
     const eco = node.eco ? `<span class="rep-eco">${node.eco}</span>` : '';
+    const nameSpan = node.canonicalSan
+      ? `<span class="rep-name" data-lore="${node.id}">${node.name}</span>`
+      : `<span class="rep-name" style="cursor:default;">${node.name}</span>`;
+    const commentaryHtml = node.canonicalSan
+      ? `<div class="rc-commentary" id="rc-comment-${node.id}"></div>`
+      : '';
     const innerHtml = hasContent
       ? `<div class="rep-children" id="rep-children-${node.id}">${node.lines.map(renderLeafLine).join('')}${childArr.map(renderClusterNode).join('')}</div>`
       : '';
     return `<div>
       <div class="rep-row">
         ${toggleBtn}
-        <span class="rep-name" style="cursor:default;">${node.name}</span>${eco}
+        ${nameSpan}${eco}
       </div>
+      ${commentaryHtml}
       ${innerHtml}
     </div>`;
   };
@@ -2624,9 +2659,27 @@ document.getElementById('repLibrary').addEventListener('click', (e)=>{
   const renameId = e.target.dataset.rename;
   const deleteId = e.target.dataset.delete;
   const viewId = e.target.dataset.view;
+  const loreId = e.target.dataset.lore;
   if(viewId){
     const line = state.repertoire[state.repColor].find(l=>l.id===viewId);
     if(line) openRepLine(line);
+    return;
+  }
+  if(loreId){
+    const node = rcNodeRegistry.get(loreId);
+    const el = document.getElementById('rc-comment-' + loreId);
+    if(!node || !el) return;
+    if(el.classList.contains('expanded')){ el.classList.remove('expanded'); return; }
+    el.classList.add('expanded');
+    if(!el.dataset.loaded){
+      el.textContent = 'Loading commentary…';
+      fetchOpeningCommentary(node.canonicalSan).then(commentary=>{
+        el.innerHTML = commentary
+          ? `${commentary.text.replace(/</g, '&lt;')}<br><a href="${commentary.url}" target="_blank" rel="noopener" style="color:var(--brass);">via Wikibooks: Chess Opening Theory ↗</a>`
+          : 'No commentary found for this opening.';
+        el.dataset.loaded = '1';
+      });
+    }
     return;
   }
   if(toggleId){
