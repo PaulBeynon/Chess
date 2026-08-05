@@ -2,7 +2,7 @@
   "name": "ledger-functions",
   "description": "Cloud Functions for Ledger — currently just explainDeviation, a Claude-backed proxy that explains why a played move was worse than the book/engine move.",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "dependencies": {
