@@ -2105,12 +2105,19 @@ async function fetchOpeningCommentary(sanMoves){
   const title = buildWikibooksTitle(sanMoves);
   if(wikibooksCommentaryCache.has(title)) return wikibooksCommentaryCache.get(title);
   try{
-    const apiUrl = `https://en.wikibooks.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=extracts&exintro=1&explaintext=1&format=json&origin=*`;
+    // Note: no exintro here — on these pages the actual commentary sits after a heading, so
+    // exintro (text before the first heading) was consistently coming back empty. Pull the
+    // full plaintext extract instead and trim it down to a blurb ourselves.
+    const apiUrl = `https://en.wikibooks.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=extracts&explaintext=1&exchars=1200&format=json&origin=*`;
     const res = await fetch(apiUrl);
     const data = await res.json();
     const page = Object.values(data?.query?.pages || {})[0];
     let text = (page && !('missing' in page)) ? (page.extract || '').trim() : '';
-    text = text.split(/For explanation of theory tables/i)[0].trim(); // strip standard page boilerplate
+    text = text.split(/For explanation of theory tables/i)[0];
+    text = text.split(/Retrieved from/i)[0];
+    text = text.replace(/^\s*Chess Opening Theory(\s*\|[^\n]*)+\n?/i, ''); // strip leading breadcrumb line, if present
+    const paragraphs = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+    text = paragraphs.slice(0, 2).join('\n\n').trim();
     const result = text ? { text, url: `https://en.wikibooks.org/wiki/${title.replace(/ /g, '_')}` } : null;
     wikibooksCommentaryCache.set(title, result);
     return result;
