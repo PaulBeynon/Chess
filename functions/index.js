@@ -94,7 +94,7 @@ exports.explainDeviation = onCall({ secrets: [ANTHROPIC_API_KEY], cors: true }, 
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY.value(),
+        'x-api-key': ANTHROPIC_API_KEY.value().trim(),
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
