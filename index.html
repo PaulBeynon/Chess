@@ -2726,9 +2726,12 @@ function checkDeviation(){
   }
 
   // ---- In-book but engine disagreed ----
-  if(inBookIssues.length > 0){
+  // Only surface issues once you've actually navigated to (or past) that ply — otherwise this
+  // was popping up the moment a game loaded, before you'd looked at any of the moves it refers to.
+  const visibleInBookIssues = inBookIssues.filter(x => x.ply <= state.ply);
+  if(visibleInBookIssues.length > 0){
     inBookBanner.classList.remove('hidden');
-    const list = inBookIssues.map(x=> `${Math.ceil(x.ply/2)}.${x.san} (${x.classification})`).join(', ');
+    const list = visibleInBookIssues.map(x=> `${Math.ceil(x.ply/2)}.${x.san} (${x.classification})`).join(', ');
     document.getElementById('inBookNoteText').textContent =
       `Book move, but the engine wasn't happy: ${list}. Staying in prep doesn't always mean it was the best move available.`;
   } else {
@@ -2736,7 +2739,10 @@ function checkDeviation(){
   }
 
   // ---- Left the book entirely ----
-  if(deviationPly){
+  // Same idea: don't announce the deviation until the board's actually been stepped forward to
+  // the move where it happened — it should read as "you've just reached the point you went off
+  // piste", not as a verdict hanging over the whole game from the moment it loads.
+  if(deviationPly && state.ply >= deviationPly){
     banner.classList.remove('hidden');
     const bookAlternatives = childMoves(node);
     const lineNames = [...new Set((node.__lines || []).map(l=>l.name))];
