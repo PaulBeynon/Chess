@@ -458,19 +458,6 @@
     <details style="margin-top:22px;">
       <summary style="cursor:pointer; color:var(--brass); font-size:13px; font-weight:600;">+ Add to library</summary>
       <div style="margin-top:14px; max-width:420px;">
-        <label>Seed from your most-played openings</label>
-        <p class="small" style="margin-top:2px; margin-bottom:8px; opacity:0.75;">
-          Looks at your career history, takes your top 20 most-played openings for this colour, and adds
-          each one's known main line as a starting point. These are single-line skeletons, not full
-          branching prep — build them out over time from the "Add to my repertoire" prompt when you
-          review a game.
-        </p>
-        <div class="row">
-          <button class="btn" id="seedFromHistoryBtn">Seed from my most-played openings</button>
-        </div>
-        <p class="small" id="seedFromHistoryStatus" style="margin-top:6px; opacity:0.8;"></p>
-      </div>
-      <div style="margin-top:22px; max-width:420px;">
         <label for="studyImportUrl">Import a Lichess study (whole thing, one line per chapter)</label>
         <input type="text" id="studyImportUrl" placeholder="https://lichess.org/study/xxxxxxxx" style="width:100%;">
         <div class="row" style="margin-top:8px;">
@@ -2289,61 +2276,6 @@ function setRepColor(c){
   document.getElementById('importStudyBtn').textContent = `Import study into ${c} repertoire`;
   closeRepBoard();
   renderCurrentRepView();
-}
-
-// Bootstraps a repertoire from scratch: takes the person's most-played openings (by frequency, from
-// their downloaded career history) for whichever colour is currently selected, and adds each one's
-// canonical main line from the lichess-org/chess-openings reference as a starting line. This gives a
-// skeleton to build from, not a finished repertoire — there's no branching for how a specific opponent
-// replied, just the named line itself. Real coverage still comes from playing games and using "Add to
-// my repertoire" on the deviation banner when review surfaces something worth keeping.
-document.getElementById('seedFromHistoryBtn').addEventListener('click', seedRepertoireFromHistory);
-async function seedRepertoireFromHistory(){
-  const btn = document.getElementById('seedFromHistoryBtn');
-  const status = document.getElementById('seedFromHistoryStatus');
-  btn.disabled = true;
-  status.textContent = 'Reading your career history…';
-  try{
-    const color = state.repColor;
-    const all = await idbGetAll('lifetimeGames');
-    const relevant = all.filter(g => (color === 'white') === !!g.isUserWhite);
-    if(relevant.length === 0){
-      status.textContent = 'No downloaded games for this colour yet — enter your Lichess username on the Games tab first, which syncs career history in the background.';
-      return;
-    }
-    status.textContent = 'Matching openings to the reference database…';
-    const ref = await loadOpeningReference();
-
-    // Tally by resolved canonical name so near-duplicate tags (eco drift, short vs. full name) collapse
-    // into one count rather than splitting your most-played line across several buckets.
-    const counts = new Map();
-    for(const g of relevant){
-      const resolved = resolveOpeningName(g.openingName || 'Unknown opening', g.eco, ref);
-      if(!ref.byName[resolved]) continue; // no canonical moves to seed from — skip, don't guess
-      counts.set(resolved, (counts.get(resolved) || 0) + 1);
-    }
-    const top20 = [...counts.entries()].sort((a,b)=> b[1]-a[1]).slice(0, 20);
-
-    let added = 0, skipped = 0;
-    for(const [name] of top20){
-      const entry = ref.byName[name];
-      const sanMoves = parseMovesString(entry.pgn);
-      const { sanClean } = buildPositions(sanMoves);
-      if(sanClean.length === 0){ skipped++; continue; }
-      const result = addRepertoireLine(color, name, entry.eco, sanClean);
-      if(result) added++; else skipped++;
-    }
-
-    renderCurrentRepView();
-    status.textContent = top20.length === 0
-      ? "Couldn't match any of your played openings to the reference database — try the Lichess study import instead."
-      : `Added ${added} line${added===1?'':'s'}${skipped ? ` (${skipped} already in your library)` : ''} from your top ${top20.length} most-played ${color} opening${top20.length===1?'':'s'}.`;
-  }catch(err){
-    console.error('seedRepertoireFromHistory failed', err);
-    status.textContent = "Something went wrong reading your history — try again shortly.";
-  }finally{
-    btn.disabled = false;
-  }
 }
 
 function renderCurrentRepView(){
