@@ -2767,16 +2767,29 @@ function checkDeviation(){
     }
 
     let bestPhrase = '';
+    let bestSan = null;
     const bestUci = state.bestMoveUcis?.[deviationPly-1];
     if(bestUci){
       const bestInfo = uciToSan(state.positions[deviationPly-1], bestUci);
-      if(bestInfo?.san && bestInfo.san !== deviationMove) bestPhrase = ` Engine preferred ${bestInfo.san}.`;
+      if(bestInfo?.san && bestInfo.san !== deviationMove){
+        bestSan = bestInfo.san;
+        bestPhrase = ` Engine's top pick here (independent of any prep): ${bestSan}.`;
+      }
     }
 
     document.getElementById('deviationText').textContent =
       `At move ${Math.ceil(deviationPly/2)}, you played ${deviationMove}, off${linePhrase}.${costPhrase}${bestPhrase}`;
-    document.getElementById('deviationBookMoves').textContent =
-      bookAlternatives.length ? `Book move${bookAlternatives.length>1?'s':''} here: ${bookAlternatives.join(', ')}` : '';
+    // Labelled "your prep says" rather than "book move" so it reads as a record of your own
+    // stored line, not as a second engine-style recommendation competing with bestPhrase above —
+    // the two can legitimately disagree, since one reflects a plan and the other a calculation.
+    if(bookAlternatives.length){
+      const clash = bestSan && !bookAlternatives.includes(bestSan);
+      document.getElementById('deviationBookMoves').textContent =
+        `Your prep says: ${bookAlternatives.join(', ')}` +
+        (clash ? ` — that's separate from the engine's pick above; prep reflects a plan, the engine just calculates the strongest move on the board.` : '');
+    } else {
+      document.getElementById('deviationBookMoves').textContent = '';
+    }
 
     document.getElementById('addToRepertoireBtn').onclick = ()=>{
       const g = state.currentGame;
