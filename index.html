@@ -970,9 +970,7 @@ function renderGameList(){
     const a = state.autoAnalysis[g.id];
     let analysisBadge = '';
     if(a?.done){
-      if(a.blunders > 0) analysisBadge = `<span class="badge loss">${a.blunders} blunder${a.blunders===1?'':'s'}</span>`;
-      else if(a.mistakes > 0) analysisBadge = `<span class="badge draw">${a.mistakes} mistake${a.mistakes===1?'':'s'}</span>`;
-      else analysisBadge = `<span class="badge win">clean</span>`;
+      analysisBadge = `<span class="small" style="opacity:0.85;" title="Analysed">✓ analysed</span>`;
     } else if(a && !a.done){
       analysisBadge = `<span class="small">analysing…</span>`;
     }
