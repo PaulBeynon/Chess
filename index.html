@@ -330,6 +330,17 @@
         <div class="deviation-banner hidden" id="inBookNoteBanner" style="border-color:var(--brass-dim);">
           <p id="inBookNoteText" class="small"></p>
         </div>
+        <div style="margin-top:16px; padding:12px 14px; background:var(--panel-2); border:1px solid var(--line); border-radius:8px;">
+          <button class="btn ghost" id="findStudyBtn">Search Lichess for a study on this opening</button>
+          <div id="studyImportInline" class="hidden" style="margin-top:10px;">
+            <label for="studyImportUrlInline" class="small">Found one? Paste its URL to import into your <span id="studyImportInlineColor"></span> repertoire</label>
+            <div class="row" style="gap:8px; margin-top:4px;">
+              <input type="text" id="studyImportUrlInline" placeholder="https://lichess.org/study/xxxxxxxx" style="flex:1; min-width:150px;">
+              <button class="btn" id="studyImportInlineBtn">Import</button>
+            </div>
+            <p class="small" id="studyImportInlineStatus" style="margin-top:6px; opacity:0.8;"></p>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -1257,6 +1268,8 @@ document.getElementById('gameTitle').addEventListener('click', (e)=>{
   state.userColor = pill.dataset.color;
   renderGameTitle(state.currentGame);
   checkDeviation();
+  const inlineColorEl = document.getElementById('studyImportInlineColor');
+  if(inlineColorEl) inlineColorEl.textContent = state.userColor;
 });
 
 // Once a game already has cached analysis, the "Analyse full game" controls shrink out of the
@@ -2471,30 +2484,59 @@ function extractStudyId(input){
   const m = input.trim().match(/study\/([a-zA-Z0-9]+)/);
   return m ? m[1] : (/^[a-zA-Z0-9]{6,10}$/.test(input.trim()) ? input.trim() : null);
 }
+// Shared by both study-import entry points (the Repertoire tab's library import, and the inline
+// importer on the Analysis page) so a fix in one place covers both.
+async function importStudyById(studyId, color, statusEl){
+  statusEl.textContent = 'Fetching study…';
+  const res = await fetch(`https://lichess.org/api/study/${studyId}.pgn`);
+  if(!res.ok) throw new Error(`Lichess responded ${res.status}`);
+  const text = await res.text();
+  const chapters = text.split(/\n(?=\[Event )/).map(c=>c.trim()).filter(Boolean);
+  if(chapters.length === 0) throw new Error('No chapters found in that study.');
+  let imported = 0, skipped = 0;
+  for(const chapter of chapters){
+    const eventMatch = chapter.match(/\[Event\s+"([^"]*)"\]/);
+    let name = eventMatch ? eventMatch[1] : null;
+    if(name && name.includes(': ')) name = name.split(': ').slice(1).join(': '); // drop "Study name: " prefix, keep chapter title
+    if(!name) name = `Chapter ${imported + skipped + 1}`;
+    const sanClean = parsePgnChapterMoves(chapter);
+    if(sanClean.length === 0){ skipped++; continue; }
+    const added = addRepertoireLine(color, name, null, sanClean);
+    if(added) imported++; else skipped++;
+  }
+  renderCurrentRepView();
+  statusEl.textContent = `Imported ${imported} chapter${imported===1?'':'s'}${skipped ? ` (${skipped} skipped — empty or already in your library)` : ''} into your ${color} repertoire.`;
+}
 document.getElementById('importStudyBtn').addEventListener('click', async ()=>{
   const status = document.getElementById('studyImportStatus');
   const studyId = extractStudyId(document.getElementById('studyImportUrl').value);
   if(!studyId){ status.textContent = "Couldn't find a study ID in that — paste the full lichess.org/study/... URL."; return; }
-  status.textContent = 'Fetching study…';
   try{
-    const res = await fetch(`https://lichess.org/api/study/${studyId}.pgn`);
-    if(!res.ok) throw new Error(`Lichess responded ${res.status}`);
-    const text = await res.text();
-    const chapters = text.split(/\n(?=\[Event )/).map(c=>c.trim()).filter(Boolean);
-    if(chapters.length === 0) throw new Error('No chapters found in that study.');
-    let imported = 0, skipped = 0;
-    for(const chapter of chapters){
-      const eventMatch = chapter.match(/\[Event\s+"([^"]*)"\]/);
-      let name = eventMatch ? eventMatch[1] : null;
-      if(name && name.includes(': ')) name = name.split(': ').slice(1).join(': '); // drop "Study name: " prefix, keep chapter title
-      if(!name) name = `Chapter ${imported + skipped + 1}`;
-      const sanClean = parsePgnChapterMoves(chapter);
-      if(sanClean.length === 0){ skipped++; continue; }
-      const added = addRepertoireLine(state.repColor, name, null, sanClean);
-      if(added) imported++; else skipped++;
-    }
-    renderCurrentRepView();
-    status.textContent = `Imported ${imported} chapter${imported===1?'':'s'}${skipped ? ` (${skipped} skipped — empty or already in your library)` : ''} into your ${state.repColor} repertoire.`;
+    await importStudyById(studyId, state.repColor, status);
+  }catch(err){
+    console.error(err);
+    status.textContent = 'Could not import that study: ' + err.message;
+  }
+});
+
+// ---- Inline "search + import" loop on the Analysis page ----
+// Lichess has no public API for keyword-searching studies (only "list this user's studies"), so
+// this can't fetch and rank results in-app — it opens Lichess's own study search in a new tab,
+// seeded with the current game's opening name, and leaves a paste box here for the URL once
+// they've found one worth having, importing straight into the colour they're reviewing.
+document.getElementById('findStudyBtn').addEventListener('click', ()=>{
+  const openingName = state.currentGame?.opening?.name || '';
+  const query = openingName || 'opening repertoire';
+  window.open(`https://lichess.org/study/search?q=${encodeURIComponent(query)}`, '_blank', 'noopener');
+  document.getElementById('studyImportInline').classList.remove('hidden');
+  document.getElementById('studyImportInlineColor').textContent = state.userColor;
+});
+document.getElementById('studyImportInlineBtn').addEventListener('click', async ()=>{
+  const status = document.getElementById('studyImportInlineStatus');
+  const studyId = extractStudyId(document.getElementById('studyImportUrlInline').value);
+  if(!studyId){ status.textContent = "Couldn't find a study ID in that — paste the full lichess.org/study/... URL."; return; }
+  try{
+    await importStudyById(studyId, state.userColor, status);
   }catch(err){
     console.error(err);
     status.textContent = 'Could not import that study: ' + err.message;
