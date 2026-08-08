@@ -161,11 +161,7 @@
   #loginGate h1{ font-size:32px; margin-bottom:6px; }
   #loginGate .btn{ width:100%; padding:12px; font-size:15px; }
   .empty{ color:var(--text-dim); font-size:13px; padding:30px 0; text-align:center; }
-  #importDetails{ background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
-  #importDetails summary{ cursor:pointer; font-family:'Fraunces', serif; font-weight:600; font-size:15px; color:var(--parchment); list-style:none; display:flex; align-items:center; }
-  #importDetails summary::-webkit-details-marker{ display:none; }
-  #importDetails summary::before{ content:'▸'; display:inline-block; margin-right:8px; color:var(--brass); transition:transform 0.15s ease; }
-  #importDetails[open] summary::before{ transform:rotate(90deg); }
+  #importPanel{ background:var(--panel-2); border:1px solid var(--line); border-radius:8px; padding:14px 16px; }
   a{ color:var(--brass); }
 
   @media (max-width: 680px){
@@ -259,44 +255,25 @@
 
   <!-- GAMES TAB -->
   <section id="tab-games" class="panel">
-    <details id="importDetails" open>
-      <summary>Import &amp; sync</summary>
-      <div style="margin-top:16px;">
-        <div class="row" style="align-items:flex-end;">
-          <div>
-            <label for="lichessUser">Lichess username</label>
-            <input type="text" id="lichessUser" placeholder="e.g. DrNykterstein">
-          </div>
-          <div>
-            <label for="maxGames">Games to fetch</label>
-            <input type="text" id="maxGames" value="20" style="width:70px;">
-          </div>
-          <button class="btn" id="fetchGamesBtn">Fetch games</button>
-          <span class="small" id="fetchStatus"></span>
+    <div id="importPanel">
+      <div class="row" style="align-items:flex-end; gap:10px;">
+        <div style="flex:1; min-width:200px;">
+          <label for="lichessUser">Lichess username</label>
+          <input type="text" id="lichessUser" placeholder="e.g. DrNykterstein">
         </div>
-        <div class="row" style="margin-top:12px; align-items:center;">
-          <span class="small" style="text-transform:uppercase; letter-spacing:0.08em;">Time control:</span>
-          <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="bullet"> Bullet</label>
-          <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="blitz"> Blitz</label>
-          <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="rapid"> Rapid</label>
-          <label style="display:flex; align-items:center; gap:5px; text-transform:none; letter-spacing:normal; margin:0;"><input type="checkbox" class="speedFilter" value="classical"> Classical</label>
-          <span class="small">(none checked = all)</span>
-        </div>
-        <div class="row" style="margin-top:12px; align-items:center;">
-          <label style="display:flex; align-items:center; gap:6px; text-transform:none; letter-spacing:normal; margin:0;">
-            <input type="checkbox" id="autoAnalyseToggle" checked>
-            Auto-analyse after import
-          </label>
-          <select id="autoAnalyseLimit">
-            <option value="5">First 5 games</option>
-            <option value="10" selected>First 10 games</option>
-            <option value="20">First 20 games</option>
-          </select>
-          <span class="small" id="autoAnalyseStatus"></span>
-        </div>
-        <p class="small" style="margin-top:14px; opacity:0.65;" id="historyLastSynced"></p>
+        <button class="btn" id="fetchGamesBtn">Import games</button>
       </div>
-    </details>
+      <span class="small" id="fetchStatus"></span>
+      <p class="small" style="margin-top:10px; opacity:0.65;" id="historyLastSynced"></p>
+    </div>
+
+    <div id="analysePrompt" class="hidden" style="margin:20px 0; padding:14px 16px; background:var(--panel-2); border:1px solid var(--line); border-radius:8px;">
+      <p class="small" style="margin-bottom:10px;">Analyse the last 10 games, or tap one below to analyse it on its own.</p>
+      <div class="row" style="align-items:center; gap:10px;">
+        <button class="btn" id="analyseLast10Btn">Analyse last 10 games</button>
+        <span class="small" id="autoAnalyseStatus"></span>
+      </div>
+    </div>
 
     <div class="gamelist" id="gameList" style="margin-top:20px;"></div>
 
@@ -871,7 +848,6 @@ document.getElementById('openingBreakdownFilter').addEventListener('change', asy
 
 async function fetchGames(){
   const username = document.getElementById('lichessUser').value.trim();
-  const max = document.getElementById('maxGames').value.trim() || '20';
   if(!username){ alert('Enter a lichess username'); return; }
   state.username = username;
   localStorage.setItem('ledger_username', username);
@@ -879,9 +855,8 @@ async function fetchGames(){
   const status = document.getElementById('fetchStatus');
   status.textContent = 'fetching…';
   try{
-    const checkedSpeeds = Array.from(document.querySelectorAll('.speedFilter:checked')).map(el=>el.value);
-    const perfTypeParam = checkedSpeeds.length ? `&perfType=${checkedSpeeds.join(',')}` : '';
-    const url = `https://lichess.org/api/games/user/${encodeURIComponent(username)}?max=${max}&opening=true&pgnInJson=true${perfTypeParam}`;
+    const max = 20; // fixed, sensible default — not worth a control of its own
+    const url = `https://lichess.org/api/games/user/${encodeURIComponent(username)}?max=${max}&opening=true&pgnInJson=true`;
     const res = await fetch(url, { headers: { 'Accept': 'application/x-ndjson' } });
     if(!res.ok) throw new Error('Lichess responded ' + res.status);
     const text = await res.text();
@@ -894,16 +869,20 @@ async function fetchGames(){
     }
     renderGameList();
     status.textContent = `${state.games.length} games loaded`;
-    const importDetails = document.getElementById('importDetails');
-    if(importDetails && state.games.length) importDetails.open = false;
-    if(document.getElementById('autoAnalyseToggle').checked){
-      runAutoAnalysis();
-    }
+    // No auto-run: surface the choice instead — analyse the last 10, or pick a single game
+    // below and analyse just that one from its own "Analyse full game" control.
+    document.getElementById('analysePrompt').classList.toggle('hidden', state.games.length === 0);
   }catch(err){
     console.error(err);
     status.textContent = 'error: ' + err.message;
   }
 }
+
+document.getElementById('analyseLast10Btn').addEventListener('click', ()=>{
+  const btn = document.getElementById('analyseLast10Btn');
+  btn.disabled = true;
+  runAutoAnalysis(10).finally(()=>{ btn.disabled = false; });
+});
 
 function maybeAutoSyncHistory(username){
   if(!username) return;
@@ -1039,10 +1018,9 @@ document.getElementById('analysisGamePicker').addEventListener('change', (e)=>{
   loadGameIntoAnalysis(g, isGameUserWhite(g));
 });
 
-async function runAutoAnalysis(){
+async function runAutoAnalysis(limit = 10){
   if(state.autoAnalysisRunning) return; // don't double-run if user re-imports mid-analysis
   state.autoAnalysisRunning = true;
-  const limit = parseInt(document.getElementById('autoAnalyseLimit').value, 10);
   const games = state.games.slice(0, limit);
   const statusEl = document.getElementById('autoAnalyseStatus');
   for(let i=0; i<games.length; i++){
@@ -1244,8 +1222,6 @@ function loadGameIntoAnalysis(g, isUserWhite){
   const picker = document.getElementById('analysisGamePicker');
   if(picker) picker.value = g.id;
 
-  const importDetails = document.getElementById('importDetails');
-  if(importDetails) importDetails.open = false;
   const analysisArea = document.getElementById('analysisArea');
   if(analysisArea) analysisArea.scrollIntoView({behavior:'smooth', block:'start'});
 
